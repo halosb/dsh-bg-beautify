@@ -76,9 +76,9 @@ pnpm dsh web          # 默认端口 3080；可用 --port 换端口
 |---|---|---|
 | `image` | `/bg/1.png` | 内置示例图（`''` = 无图） |
 | `size` / `position` / `fixed` | cover / center / false | 图片显示方式 |
-| `opacityMain` | 0 | 主区 / 聊天区（0 全透 ～ 1 不透） |
-| `opacitySidebar` | 0.3 | 侧边栏 |
-| `opacityCard` | 0.85 | 卡片 / 浮层 |
+| `opacityMain` | 0.25 | 主区 / 聊天区（0 全透 ～ 1 不透） |
+| `opacitySidebar` | 0.5 | 侧边栏 |
+| `opacityCard` | 0.7 | 卡片 / 浮层 |
 | `opacityInput` | 0.75 | 输入区 |
 | `textColor` | white | 文字颜色（white / black / auto） |
 | `scrim` | false | 背景纱幕（半透明遮罩增强对比） |

@@ -35,9 +35,9 @@ window.__ModuleLoader__.load({
       size: 'cover',                // cover / contain / 具体尺寸
       position: 'center',           // CSS background-position
       fixed: false,                 // true = 背景固定；false = 随页面滚动（大图更清晰）
-      opacityMain: 0,               // 主区 / 聊天区（0 全透 ～ 1 不透）
-      opacitySidebar: 0.3,          // 左侧边栏
-      opacityCard: 0.85,            // 卡片 / 菜单 / 浮层
+      opacityMain: 0.25,            // 主区 / 聊天区（0 全透 ～ 1 不透）
+      opacitySidebar: 0.5,          // 左侧边栏
+      opacityCard: 0.7,             // 卡片 / 菜单 / 浮层
       opacityInput: 0.75,           // 输入区
       textColor: 'white',           // 文字颜色：white / black / auto（跟随主题）
       scrim: false,                 // 背景纱幕：叠加半透明纱幕增强整体对比
