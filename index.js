@@ -35,7 +35,7 @@ const CONFIG_PATH = fileURLToPath(new URL('./config.json', import.meta.url))
 
 /** Defaults (must match the client bundle's DEFAULTS). */
 const DEFAULT_CONFIG = {
-  image: '/bg/placeholder.svg',
+  image: '/bg/1.png',
   size: 'cover',
   position: 'center',
   fixed: false,
@@ -43,8 +43,7 @@ const DEFAULT_CONFIG = {
   opacitySidebar: 0.3,
   opacityCard: 0.85,
   opacityInput: 0.75,
-  textProtect: true,
-  textStrength: 0.5,
+  textColor: 'white',
   scrim: false,
 }
 
@@ -119,11 +118,10 @@ function sanitizeSettings(input) {
       out[key] = Math.min(1, Math.max(0, input[key]))
     }
   }
-  if (typeof input.textProtect === 'boolean') out.textProtect = input.textProtect
-  if (typeof input.scrim === 'boolean') out.scrim = input.scrim
-  if (typeof input.textStrength === 'number' && Number.isFinite(input.textStrength)) {
-    out.textStrength = Math.min(1, Math.max(0, input.textStrength))
+  if (input.textColor === 'white' || input.textColor === 'black' || input.textColor === 'auto') {
+    out.textColor = input.textColor
   }
+  if (typeof input.scrim === 'boolean') out.scrim = input.scrim
   return out
 }
 

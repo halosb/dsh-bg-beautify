@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
 
     // ── 默认值（首次运行 / 未设置时的初始外观） ────────────────────────────
     var DEFAULTS = {
-      image: '/bg/placeholder.svg', // '' = 无图（只做半透明）
+      image: '/bg/1.png',           // '' = 无图（只做半透明）
       size: 'cover',                // cover / contain / 具体尺寸
       position: 'center',           // CSS background-position
       fixed: false,                 // true = 背景固定；false = 随页面滚动（大图更清晰）
@@ -39,8 +39,7 @@ window.__ModuleLoader__.load({
       opacitySidebar: 0.3,          // 左侧边栏
       opacityCard: 0.85,            // 卡片 / 菜单 / 浮层
       opacityInput: 0.75,           // 输入区
-      textProtect: true,            // 文字保护：给文字加描边光晕，背景复杂时更易读
-      textStrength: 0.5,            // 文字保护强度（0 ～ 1）
+      textColor: 'white',           // 文字颜色：white / black / auto（跟随主题）
       scrim: false,                 // 背景纱幕：叠加半透明纱幕增强整体对比
     }
 
@@ -111,12 +110,6 @@ window.__ModuleLoader__.load({
         if (s.fixed) lines.push('  background-attachment: fixed;')
       }
       lines.push('}')
-      // 文字保护：text-shadow 会继承到所有文本，给文字加同色描边光晕（亮色用白晕、暗色用黑晕）。
-      if (s.textProtect === true) {
-        var halo = (0.3 + 0.6 * (typeof s.textStrength === 'number' ? Math.min(1, Math.max(0, s.textStrength)) : 0.5)).toFixed(3)
-        lines.push('body:not([data-ds-dark-theme]){text-shadow:0 0 1px rgba(255,255,255,' + halo + '),0 0 4px rgba(255,255,255,' + halo + '),0 1px 2px rgba(0,0,0,0.12);}')
-        lines.push('body[data-ds-dark-theme]{text-shadow:0 0 1px rgba(0,0,0,' + halo + '),0 0 4px rgba(0,0,0,' + halo + '),0 1px 2px rgba(0,0,0,0.25);}')
-      }
       // 背景纱幕：固定一层半透明遮罩盖在背景图之上（不挡点击）。
       if (s.scrim === true) {
         lines.push('body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;}')
@@ -158,6 +151,14 @@ window.__ModuleLoader__.load({
           dark: 'rgba(44, 44, 46, ' + s.opacityInput + ')',
         },
       }
+      // 文字颜色：white/black 覆盖标签色（亮暗两套都给同一个值，用户可换）。
+      if (s.textColor === 'white' || s.textColor === 'black') {
+        var c = s.textColor === 'white' ? '#ffffff' : '#0f1115'
+        tokens['--dsw-alias-label-primary'] = { light: c, dark: c }
+        tokens['--dsw-alias-label-secondary'] = { light: c + 'd9', dark: c + 'd9' } // 85% 白/黑
+        tokens['--dsw-alias-label-tertiary'] = { light: c + '99', dark: c + '99' } // 60% 白/黑
+      }
+      return tokens
     }
 
     /** Services this client plugin needs (fiber inject). */
@@ -337,17 +338,17 @@ window.__ModuleLoader__.load({
         SliderRow({ label: '卡片/浮层透明度', value: s.opacityCard, onChange: function (v) { setField('opacityCard', v) } }),
         SliderRow({ label: '输入区透明度', value: s.opacityInput, onChange: function (v) { setField('opacityInput', v) } }),
         Row({
-          title: '文字保护',
-          caption: '给文字加描边光晕，背景复杂 / 图片较亮时更易读。',
-          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
-            el('input', {
-              type: 'checkbox', className: 'dsh-bgb-check', checked: s.textProtect === true,
-              onChange: function (e) { setField('textProtect', e.target.checked) },
-            }),
-            '启用',
+          title: '文字颜色',
+          caption: '白色在深色/亮色背景上都更清晰，适合浅色模式用户（默认白色）。',
+          children: el('select', {
+            className: 'dsh-bgb-input dsh-bgb-select', value: s.textColor,
+            onChange: function (e) { setField('textColor', e.target.value) },
+          },
+            el('option', { value: 'white' }, '白色'),
+            el('option', { value: 'black' }, '黑色'),
+            el('option', { value: 'auto' }, '跟随主题'),
           ),
         }),
-        SliderRow({ label: '文字保护强度', value: s.textStrength, onChange: function (v) { setField('textStrength', v) } }),
         Row({
           title: '背景纱幕',
           caption: '在背景图上叠加一层半透明纱幕，整体对比更强（默认关闭）。',

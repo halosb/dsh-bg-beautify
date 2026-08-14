@@ -63,8 +63,7 @@ pnpm dsh web          # 默认端口 3080；可用 --port 换端口
 | 背景图 | 文本框：`/bg/文件名` / `https://...` / `data:image/...`；留空 = 无图 |
 | 从本地选择图片 | 上传到插件 `assets/`，自动填入 `/bg/文件名` |
 | 四个透明度滑块 | 主区 / 侧边栏 / 卡片浮层 / 输入区，0（全透）～ 1（不透），越小背景图越明显 |
-| 文字保护 | 给文字加描边光晕，背景复杂 / 图片较亮时更易读（默认开启） |
-| 文字保护强度 | 0 ～ 1，调整描边光晕的浓淡 |
+| 文字颜色 | 白色 / 黑色 / 跟随主题；浅色模式下建议白色（默认），文字更清晰 |
 | 背景纱幕 | 在背景图上叠加一层半透明纱幕，整体对比更强（默认关闭） |
 | 尺寸 / 位置 / 背景固定 | cover / contain / auto；CSS position；大图建议取消固定（Chrome 对固定大背景会模糊） |
 | 恢复默认 | **只重置四个透明度**到出厂值，背景图与显示方式不变 |
@@ -75,13 +74,13 @@ pnpm dsh web          # 默认端口 3080；可用 --port 换端口
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `image` | `/bg/placeholder.svg` | 内置占位渐变图（`''` = 无图） |
+| `image` | `/bg/1.png` | 内置示例图（`''` = 无图） |
 | `size` / `position` / `fixed` | cover / center / false | 图片显示方式 |
 | `opacityMain` | 0 | 主区 / 聊天区（0 全透 ～ 1 不透） |
 | `opacitySidebar` | 0.3 | 侧边栏 |
 | `opacityCard` | 0.85 | 卡片 / 浮层 |
 | `opacityInput` | 0.75 | 输入区 |
-| `textProtect` / `textStrength` | true / 0.5 | 文字保护开关 / 强度（描边光晕） |
+| `textColor` | white | 文字颜色（white / black / auto） |
 | `scrim` | false | 背景纱幕（半透明遮罩增强对比） |
 
 ## 卸载
