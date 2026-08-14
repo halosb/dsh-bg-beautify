@@ -15,6 +15,12 @@
 - 🎨 设置分区 UI 完全对齐 DSH 内置设置页的设计语言（胶囊按钮、h32 字段、主题 token）
 - 🔒 仅监听回环地址（127.0.0.1）；上传文件名白名单 + 路径穿越防护
 
+## 效果预览
+
+![示例图 1](docs/screenshots/demo-1.png)
+
+![示例图 2](docs/screenshots/demo-2.png)
+
 ## 工作原理（30 秒）
 
 1. 本插件是一个 DSH **组合包（bundle）**：`package.json` 声明 `dsh.bundle`（贡献一行组合配置）+ `dsh.client`（声明浏览器端 bundle）。
