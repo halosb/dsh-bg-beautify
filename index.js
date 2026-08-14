@@ -43,6 +43,9 @@ const DEFAULT_CONFIG = {
   opacitySidebar: 0.3,
   opacityCard: 0.85,
   opacityInput: 0.75,
+  textProtect: true,
+  textStrength: 0.5,
+  scrim: false,
 }
 
 /** Upload cap: 25 MiB. Settings body cap: 64 KiB. */
@@ -115,6 +118,11 @@ function sanitizeSettings(input) {
     if (typeof input[key] === 'number' && Number.isFinite(input[key])) {
       out[key] = Math.min(1, Math.max(0, input[key]))
     }
+  }
+  if (typeof input.textProtect === 'boolean') out.textProtect = input.textProtect
+  if (typeof input.scrim === 'boolean') out.scrim = input.scrim
+  if (typeof input.textStrength === 'number' && Number.isFinite(input.textStrength)) {
+    out.textStrength = Math.min(1, Math.max(0, input.textStrength))
   }
   return out
 }

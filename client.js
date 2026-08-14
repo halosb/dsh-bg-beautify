@@ -39,6 +39,9 @@ window.__ModuleLoader__.load({
       opacitySidebar: 0.3,          // 左侧边栏
       opacityCard: 0.85,            // 卡片 / 菜单 / 浮层
       opacityInput: 0.75,           // 输入区
+      textProtect: true,            // 文字保护：给文字加描边光晕，背景复杂时更易读
+      textStrength: 0.5,            // 文字保护强度（0 ～ 1）
+      scrim: false,                 // 背景纱幕：叠加半透明纱幕增强整体对比
     }
 
     // ── Section UI stylesheet (DSH design language, theme tokens only) ──────
@@ -108,6 +111,18 @@ window.__ModuleLoader__.load({
         if (s.fixed) lines.push('  background-attachment: fixed;')
       }
       lines.push('}')
+      // 文字保护：text-shadow 会继承到所有文本，给文字加同色描边光晕（亮色用白晕、暗色用黑晕）。
+      if (s.textProtect === true) {
+        var halo = (0.3 + 0.6 * (typeof s.textStrength === 'number' ? Math.min(1, Math.max(0, s.textStrength)) : 0.5)).toFixed(3)
+        lines.push('body:not([data-ds-dark-theme]){text-shadow:0 0 1px rgba(255,255,255,' + halo + '),0 0 4px rgba(255,255,255,' + halo + '),0 1px 2px rgba(0,0,0,0.12);}')
+        lines.push('body[data-ds-dark-theme]{text-shadow:0 0 1px rgba(0,0,0,' + halo + '),0 0 4px rgba(0,0,0,' + halo + '),0 1px 2px rgba(0,0,0,0.25);}')
+      }
+      // 背景纱幕：固定一层半透明遮罩盖在背景图之上（不挡点击）。
+      if (s.scrim === true) {
+        lines.push('body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;}')
+        lines.push('body:not([data-ds-dark-theme])::before{background:rgba(255,255,255,0.14);}')
+        lines.push('body[data-ds-dark-theme]::before{background:rgba(0,0,0,0.14);}')
+      }
       return lines.join('\n')
     }
 
@@ -321,6 +336,29 @@ window.__ModuleLoader__.load({
         SliderRow({ label: '侧边栏透明度', value: s.opacitySidebar, onChange: function (v) { setField('opacitySidebar', v) } }),
         SliderRow({ label: '卡片/浮层透明度', value: s.opacityCard, onChange: function (v) { setField('opacityCard', v) } }),
         SliderRow({ label: '输入区透明度', value: s.opacityInput, onChange: function (v) { setField('opacityInput', v) } }),
+        Row({
+          title: '文字保护',
+          caption: '给文字加描边光晕，背景复杂 / 图片较亮时更易读。',
+          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
+            el('input', {
+              type: 'checkbox', className: 'dsh-bgb-check', checked: s.textProtect === true,
+              onChange: function (e) { setField('textProtect', e.target.checked) },
+            }),
+            '启用',
+          ),
+        }),
+        SliderRow({ label: '文字保护强度', value: s.textStrength, onChange: function (v) { setField('textStrength', v) } }),
+        Row({
+          title: '背景纱幕',
+          caption: '在背景图上叠加一层半透明纱幕，整体对比更强（默认关闭）。',
+          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
+            el('input', {
+              type: 'checkbox', className: 'dsh-bgb-check', checked: s.scrim === true,
+              onChange: function (e) { setField('scrim', e.target.checked) },
+            }),
+            '启用',
+          ),
+        }),
         Row({
           title: '图片尺寸',
           caption: 'cover 铺满裁剪；contain 完整显示。',
