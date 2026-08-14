@@ -1,6 +1,8 @@
 /**
  * dsh-bg-beautify — browser half (settings-page version).
  *
+ * @author 芝麻 (halosb) <i@halosb.com>
+ *
  * A DSH client plugin bundle: calls window.__ModuleLoader__.load({ id, factory })
  * and the factory returns { apply, inject }. Runs inside the Web UI page.
  *

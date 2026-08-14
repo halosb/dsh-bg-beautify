@@ -1,6 +1,8 @@
 /**
  * dsh-bg-beautify — Node (host) half.
  *
+ * @author 芝麻 (halosb) <i@halosb.com>
+ *
  * Three HTTP endpoints, all on the webserver (no DSH source touched):
  *   GET  /bg/<file>     — serve a background image from ./assets/
  *   POST /bg/upload     — accept an image upload (data: URI), store it in

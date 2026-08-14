@@ -110,6 +110,13 @@ dsh-bg-beautify/
 - 客户端 bundle 内容变化需要重启（或 `pnpm run dev:web` 的 HMR watcher 正在运行）。
 - 提交前请勿包含个人图片/配置（`config.json` 已在 `.gitignore`）。
 
+## 反馈
+
+有问题或建议，欢迎通过邮箱联系作者：
+
+- 📮 **反馈邮箱**：i@halosb.com
+- 作者：芝麻 (halosb)
+
 ## 许可证
 
 [MIT](./LICENSE)

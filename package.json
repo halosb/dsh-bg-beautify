@@ -12,7 +12,7 @@
     "cordis"
   ],
   "license": "MIT",
-  "author": "halosb",
+  "author": "芝麻 (halosb) <i@halosb.com>",
   "type": "module",
   "main": "index.js",
   "exports": {
