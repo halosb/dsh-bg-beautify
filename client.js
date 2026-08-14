@@ -110,6 +110,36 @@ window.__ModuleLoader__.load({
         if (s.fixed) lines.push('  background-attachment: fixed;')
       }
       lines.push('}')
+      // 文字颜色（作用域精确版，仅浅色模式生效；深色模式文字本就浅色、对比良好）：
+      // 白/黑只作用于「透明主区」——会话区、欢迎页、输入区欢迎语；
+      // 自带底色的子区（消息气泡、输入条、芯片、停靠卡、菜单、浮层）与
+      // 侧边栏/详情栏一律恢复主题默认（浅色=黑字），避免白字压在浅色底上看不清。
+      // 选择器用稳定的 data-slot 属性，跨构建有效。
+      if (s.textColor === 'white' || s.textColor === 'black') {
+        var c = s.textColor === 'white' ? '#ffffff' : '#0f1115'
+        var c2 = c + 'd9' // 85%
+        var c3 = c + '99' // 60%
+        // 主区（透明）→ 应用文字颜色
+        lines.push(
+          'body:not([data-ds-dark-theme]) [data-slot="conversation.session"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.hero.workspace"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.hero.agentPreset"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.composer"]'
+          + '{--dsw-alias-label-primary:' + c + ';--dsw-alias-label-secondary:' + c2 + ';--dsw-alias-label-tertiary:' + c3 + ';}'
+        )
+        // 自带底色的子区 → 恢复浅色主题默认文字色（黑字），避免白字压在浅色底上。
+        lines.push(
+          'body:not([data-ds-dark-theme]) [data-slot="conversation.chat.node"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.composer.bar"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.input.dock"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.input.overlay"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.input.plan"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.input.left"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.input.right"],'
+          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.input.model"]'
+          + '{--dsw-alias-label-primary:var(--dsw-static-neutral-bluish-1000);--dsw-alias-label-secondary:var(--dsw-static-neutral-bluish-700);--dsw-alias-label-tertiary:var(--dsw-static-neutral-bluish-600);}'
+        )
+      }
       // 背景纱幕：固定一层半透明遮罩盖在背景图之上（不挡点击）。
       if (s.scrim === true) {
         lines.push('body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;}')
@@ -150,13 +180,6 @@ window.__ModuleLoader__.load({
           light: 'rgba(255, 255, 255, ' + s.opacityInput + ')',
           dark: 'rgba(44, 44, 46, ' + s.opacityInput + ')',
         },
-      }
-      // 文字颜色：white/black 覆盖标签色（亮暗两套都给同一个值，用户可换）。
-      if (s.textColor === 'white' || s.textColor === 'black') {
-        var c = s.textColor === 'white' ? '#ffffff' : '#0f1115'
-        tokens['--dsw-alias-label-primary'] = { light: c, dark: c }
-        tokens['--dsw-alias-label-secondary'] = { light: c + 'd9', dark: c + 'd9' } // 85% 白/黑
-        tokens['--dsw-alias-label-tertiary'] = { light: c + '99', dark: c + '99' } // 60% 白/黑
       }
       return tokens
     }
@@ -339,7 +362,7 @@ window.__ModuleLoader__.load({
         SliderRow({ label: '输入区透明度', value: s.opacityInput, onChange: function (v) { setField('opacityInput', v) } }),
         Row({
           title: '文字颜色',
-          caption: '白色在深色/亮色背景上都更清晰，适合浅色模式用户（默认白色）。',
+          caption: '只作用于主区（会话/欢迎页）；卡片、菜单、侧边栏保持主题默认，避免看不清。',
           children: el('select', {
             className: 'dsh-bgb-input dsh-bgb-select', value: s.textColor,
             onChange: function (e) { setField('textColor', e.target.value) },
