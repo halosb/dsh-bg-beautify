@@ -121,7 +121,7 @@ window.__ModuleLoader__.load({
 
     /** Theme token overrides (light/dark pairs) for one settings object. */
     function buildTokens(s) {
-      return {
+      var tokens = {
         '--dsw-alias-bg-base': {
           light: 'rgba(255, 255, 255, ' + s.opacityMain + ')',
           dark: 'rgba(21, 21, 23, ' + s.opacityMain + ')',
