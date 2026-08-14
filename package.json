@@ -1,0 +1,46 @@
+{
+  "name": "dsh-bg-beautify",
+  "version": "0.1.0",
+  "description": "背景图 + 面板半透明美化插件 for the DeepSeek Harness Web UI — with a live settings page, installed as a plugin without touching any source file.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "theme",
+    "background",
+    "ui",
+    "cordis"
+  ],
+  "license": "MIT",
+  "author": "halosb",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "assets",
+    "README.md",
+    "安装教程-INSTALL.zh.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-theme"
+      ],
+      "platform": "web"
+    }
+  }
+}
