@@ -36,20 +36,22 @@
 ## 安装
 
 ```powershell
-# 从 GitHub 安装（推荐）
+# 从 GitHub 安装（已安装 CLI）
 dsh plugin --profile web add github:halosb/dsh-bg-beautify
 
-# 或本地目录
-dsh plugin --profile web add ./dsh-bg-beautify
+# 从 GitHub 安装（源码运行环境）
+pnpm dsh plugin --profile web add github:halosb/dsh-bg-beautify
 
-# 源码运行环境用
+# 或本地目录（两种环境都可以）
+dsh plugin --profile web add ./dsh-bg-beautify
 pnpm dsh plugin --profile web add ./dsh-bg-beautify
 ```
 
 安装后**必须重启** `dsh web`（客户端模块的包扫描与引导图在启动时组装）：
 
 ```powershell
-pnpm dsh web          # 默认端口 3080；可用 --port 换端口
+dsh web            # 默认端口 3080；可用 --port 换端口
+pnpm dsh web       # 源码运行环境
 ```
 
 > 本插件是纯 JS、无构建步骤，git 安装不需要 `prepare`/`allowBuilds`。
