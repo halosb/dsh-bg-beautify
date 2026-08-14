@@ -62,12 +62,12 @@ pnpm dsh --profile web --dump-config
 - `window.__DSH_BOOT__` 引导图在启动时组装，`/plugins/dsh-bg-beautify/client.js` 只有在重启后才会进入引导图。
 
 ```powershell
-pnpm dsh web --port 4000
+pnpm dsh web          # 默认端口 3080；与其它进程冲突时再用 --port 换端口，如 --port 4000
 ```
 
 ## 3. 验证安装成功
 
-1. 打开 `http://127.0.0.1:4000`（或你用的端口），刷新页面。
+1. 打开 `http://127.0.0.1:3080`（默认端口；若用了 `--port` 则打开对应端口），刷新页面。
 2. 应看到：整页有背景图，主区/侧边栏/卡片呈半透明，背景隐约透出。
 3. 浏览器开发者工具 → Network 里应能请求到 `GET /plugins/dsh-bg-beautify/client.js?rev=...` 且状态 200。
 4. 在 设置 → 外观 里切换 浅色/深色，两边都应该是半透明（插件对亮暗两套都给了值）。
@@ -105,7 +105,7 @@ Copy-Item "D:\你的图片\背景.jpg" "dsh-bg-beautify\assets\background.jpg"
 
 ```text
 # ③ 完事——页面立刻生效（想先验证图片被伺服，浏览器直接开：
-http://127.0.0.1:4000/bg/background.jpg
+http://127.0.0.1:3080/bg/background.jpg
 ```
 
 > 为什么不能直接填 `C:\...` 路径：浏览器禁止 http 页面加载本地路径（`file:///` 会被拦截），所以插件让 DSH 自己把 `assets\` 下的文件伺服为 `/bg/文件名`。支持 jpg/png/gif/webp/avif/svg。
@@ -130,7 +130,7 @@ http://127.0.0.1:4000/bg/background.jpg
 
 ```powershell
 pnpm dsh plugin --profile web remove dsh-bg-beautify
-pnpm dsh web --port 4000      # 重启后恢复默认外观
+pnpm dsh web      # 重启后恢复默认外观（默认端口 3080）
 ```
 
 该命令会同时移除依赖、对应的组合层；插件目录本身保留（`config.json` 是你的设置，一并删除即彻底还原）。

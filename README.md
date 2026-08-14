@@ -43,7 +43,7 @@ pnpm dsh plugin --profile web add ./dsh-bg-beautify
 安装后**必须重启** `dsh web`（客户端模块的包扫描与引导图在启动时组装）：
 
 ```powershell
-pnpm dsh web --port 4000
+pnpm dsh web          # 默认端口 3080；可用 --port 换端口
 ```
 
 > 本插件是纯 JS、无构建步骤，git 安装不需要 `prepare`/`allowBuilds`。
