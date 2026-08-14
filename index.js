@@ -45,6 +45,9 @@ const DEFAULT_CONFIG = {
   opacityInput: 0.75,
   textColor: 'white',
   scrim: false,
+  brandIcon: '',
+  welcomeText: '',
+  titleSuffix: '',
 }
 
 /** Upload cap: 25 MiB. Settings body cap: 64 KiB. */
@@ -122,6 +125,9 @@ function sanitizeSettings(input) {
     out.textColor = input.textColor
   }
   if (typeof input.scrim === 'boolean') out.scrim = input.scrim
+  if (typeof input.brandIcon === 'string') out.brandIcon = input.brandIcon
+  if (typeof input.welcomeText === 'string') out.welcomeText = input.welcomeText
+  if (typeof input.titleSuffix === 'string') out.titleSuffix = input.titleSuffix
   return out
 }
 

@@ -41,6 +41,9 @@ window.__ModuleLoader__.load({
       opacityInput: 0.75,           // 输入区
       textColor: 'white',           // 文字颜色：white / black / auto（跟随主题）
       scrim: false,                 // 背景纱幕：叠加半透明纱幕增强整体对比
+      brandIcon: '',                // 品牌：浏览器图标（favicon），/bg/xxx、外链或 data URI；留空=默认
+      welcomeText: '',              // 品牌：空会话欢迎语；留空=默认
+      titleSuffix: '',              // 品牌：浏览器标签页标题后缀；留空=默认
     }
 
     // ── Section UI stylesheet (DSH design language, theme tokens only) ──────
@@ -243,6 +246,99 @@ window.__ModuleLoader__.load({
         }
       }, 'dsh-bg-beautify: live apply')
 
+      // 品牌定制：favicon / 欢迎语 / 浏览器标题后缀，随 store 变化即时应用；
+      // 用 MutationObserver 兜底外壳重渲染（会话切换、标题投影）后的恢复。
+      ctx.effect(function () {
+        var originalFavicon = null
+        var originalHeadline = null
+        var lastSuffix = ''
+        var titleObserver = null
+        var welcomeObserver = null
+
+        function applyFavicon(s) {
+          var link = document.querySelector('link[rel~="icon"]')
+          if (s.brandIcon !== '') {
+            if (originalFavicon === null && link !== null) originalFavicon = link.getAttribute('href')
+            if (link === null) {
+              link = document.createElement('link')
+              link.rel = 'icon'
+              document.head.appendChild(link)
+            }
+            if (link.getAttribute('href') !== s.brandIcon) link.setAttribute('href', s.brandIcon)
+          } else if (originalFavicon !== null && link !== null) {
+            if (link.getAttribute('href') !== originalFavicon) link.setAttribute('href', originalFavicon)
+          }
+        }
+
+        function applyWelcome(s) {
+          // CSS Modules 类名 = <hash>_<原始名>，后缀稳定，跨构建可选中。
+          var headline = document.querySelector('[class$="_headlineText"]')
+          if (headline === null) return
+          if (originalHeadline === null) originalHeadline = headline.textContent
+          var want = s.welcomeText !== '' ? s.welcomeText : originalHeadline
+          if (headline.textContent !== want) headline.textContent = want
+        }
+
+        function applyTitle(s) {
+          if (s.titleSuffix !== lastSuffix) {
+            if (lastSuffix !== '' && document.title.endsWith(' · ' + lastSuffix)) {
+              document.title = document.title.slice(0, -(' · ' + lastSuffix).length)
+            }
+            lastSuffix = s.titleSuffix
+          }
+          if (s.titleSuffix !== '' && !document.title.endsWith(s.titleSuffix)) {
+            document.title = document.title + ' · ' + s.titleSuffix
+          }
+        }
+
+        function applyAll() {
+          var s = store.get()
+          applyFavicon(s)
+          applyWelcome(s)
+          applyTitle(s)
+        }
+
+        applyAll()
+        var off = store.subscribe(function () { applyAll() })
+
+        // 外壳可能在会话标题变化时重写 document.title，观察并补回后缀。
+        var titleEl = document.querySelector('head > title')
+        if (titleEl !== null) {
+          titleObserver = new MutationObserver(function () {
+            var s = store.get()
+            if (s.titleSuffix !== '' && !document.title.endsWith(s.titleSuffix)) {
+              document.title = document.title + ' · ' + s.titleSuffix
+            }
+          })
+          titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true })
+        }
+
+        // 欢迎语元素会随会话/路由重挂载，观察主列并补应用。
+        var column = document.querySelector('[data-slot="conversation"]')
+        if (column !== null) {
+          welcomeObserver = new MutationObserver(function () {
+            applyWelcome(store.get())
+          })
+          welcomeObserver.observe(column, { childList: true, subtree: true, characterData: true })
+        }
+
+        return function () {
+          off()
+          if (titleObserver !== null) titleObserver.disconnect()
+          if (welcomeObserver !== null) welcomeObserver.disconnect()
+          // 还原 favicon / 欢迎语 / 标题后缀
+          var link = document.querySelector('link[rel~="icon"]')
+          if (originalFavicon !== null && link !== null) link.setAttribute('href', originalFavicon)
+          var headline = document.querySelector('[class$="_headlineText"]')
+          if (originalHeadline !== null && headline !== null && headline.textContent !== originalHeadline) {
+            headline.textContent = originalHeadline
+          }
+          if (lastSuffix !== '' && document.title.endsWith(' · ' + lastSuffix)) {
+            document.title = document.title.slice(0, -(' · ' + lastSuffix).length)
+          }
+        }
+      }, 'dsh-bg-beautify: brand')
+
       // The settings page section: Settings → 背景美化.
       ctx.slots.inject('settings.section', function () {
         return ctx.slots.register({
@@ -414,6 +510,39 @@ window.__ModuleLoader__.load({
             }),
             '固定背景',
           ),
+        }),
+        el('div', { className: 'dsh-bgb-row', style: { borderBottom: 'none', paddingBottom: '4px' } },
+          el('div', { className: 'dsh-bgb-rowLabel' },
+            el('div', { className: 'dsh-bgb-rowTitle', style: { fontSize: '16px', lineHeight: '24px', fontWeight: '500' } }, '品牌定制'),
+            el('div', { className: 'dsh-bgb-caption' }, '换浏览器图标、欢迎语、标签页标题（启动页文案由外壳渲染，插件无法修改）。'),
+          ),
+        ),
+        Row({
+          title: '浏览器图标',
+          caption: 'favicon：填 /bg/xxx.svg、https:// 外链或 data: URI；留空 = 默认图标。',
+          children: el('input', {
+            type: 'text', className: 'dsh-bgb-input dsh-bgb-inputField',
+            value: s.brandIcon, placeholder: '/bg/logo.svg',
+            onChange: function (e) { setField('brandIcon', e.target.value) },
+          }),
+        }),
+        Row({
+          title: '欢迎语',
+          caption: '替换空会话页的欢迎语；留空 = 默认。',
+          children: el('input', {
+            type: 'text', className: 'dsh-bgb-input dsh-bgb-inputField',
+            value: s.welcomeText, placeholder: '你好，世界',
+            onChange: function (e) { setField('welcomeText', e.target.value) },
+          }),
+        }),
+        Row({
+          title: '浏览器标题后缀',
+          caption: '追加到标签页标题末尾，如 — MyBrand；留空 = 默认。',
+          children: el('input', {
+            type: 'text', className: 'dsh-bgb-input dsh-bgb-inputField',
+            value: s.titleSuffix, placeholder: 'MyBrand',
+            onChange: function (e) { setField('titleSuffix', e.target.value) },
+          }),
         }),
         el('div', { className: 'dsh-bgb-row' },
           el('div', { className: 'dsh-bgb-rowLabel' },
