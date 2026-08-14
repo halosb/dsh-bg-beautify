@@ -1,11 +1,5 @@
-// dsh-bg-beautify
-// 作者：芝麻 (halosb)
-// 邮箱：i@halosb.com
-// License: MIT
 /**
  * dsh-bg-beautify — browser half (settings-page version).
- *
- * @author 芝麻 (halosb) <i@halosb.com>
  *
  * A DSH client plugin bundle: calls window.__ModuleLoader__.load({ id, factory })
  * and the factory returns { apply, inject }. Runs inside the Web UI page.
@@ -31,19 +25,19 @@ window.__ModuleLoader__.load({
 
     // ── 默认值（首次运行 / 未设置时的初始外观） ────────────────────────────
     var DEFAULTS = {
-      image: '/bg/1.png',           // '' = 无图（只做半透明）
-      size: 'cover',                // cover / contain / 具体尺寸
-      position: 'center',           // CSS background-position
-      fixed: false,                 // true = 背景固定；false = 随页面滚动（大图更清晰）
-      opacityMain: 0.25,            // 主区 / 聊天区（0 全透 ～ 1 不透）
-      opacitySidebar: 0.5,          // 左侧边栏
-      opacityCard: 0.7,             // 卡片 / 菜单 / 浮层
-      opacityInput: 0.75,           // 输入区
-      textColor: 'white',           // 文字颜色：white / black / auto（跟随主题）
-      scrim: false,                 // 背景纱幕：叠加半透明纱幕增强整体对比
-      brandIcon: '',                // 品牌：浏览器图标（favicon），/bg/xxx、外链或 data URI；留空=默认
-      welcomeText: '',              // 品牌：空会话欢迎语；留空=默认
-      titleSuffix: '',              // 品牌：浏览器标签页标题后缀；留空=默认
+      image: '/bg/1.png',        // '' = 无图（只做半透明）
+      size: 'cover',             // cover / contain / 具体尺寸
+      position: 'center',        // CSS background-position
+      fixed: false,              // true = 背景固定；false = 随页面滚动（大图更清晰）
+      opacityMain: 0.25,         // 主区 / 聊天区（0 全透 ～ 1 不透）
+      opacitySidebar: 0.5,       // 左侧边栏
+      opacityCard: 0.7,          // 卡片 / 菜单 / 浮层
+      opacityInput: 0.75,        // 输入区
+      textColor: 'white',        // 文字颜色：white / black / auto（跟随主题）
+      scrim: false,              // 背景纱幕：叠加半透明纱幕增强整体对比
+      brandIcon: '',             // 品牌：浏览器图标（favicon），/bg/xxx、外链或 data URI；留空=默认
+      welcomeText: '',           // 品牌：空会话欢迎语；留空=默认
+      titleSuffix: '',           // 品牌：浏览器标签页标题后缀；留空=默认
     }
 
     // ── Section UI stylesheet (DSH design language, theme tokens only) ──────
@@ -127,10 +121,13 @@ window.__ModuleLoader__.load({
           'body:not([data-ds-dark-theme]) [data-slot="conversation.session"],'
           + 'body:not([data-ds-dark-theme]) [data-slot="conversation.hero.workspace"],'
           + 'body:not([data-ds-dark-theme]) [data-slot="conversation.hero.agentPreset"],'
-          + 'body:not([data-ds-dark-theme]) [data-slot="conversation.composer"]'
+          + 'body:not([data-ds-dark-theme]) [class$="_headlineText"]'
           + '{--dsw-alias-label-primary:' + c + ';--dsw-alias-label-secondary:' + c2 + ';--dsw-alias-label-tertiary:' + c3 + ';}'
         )
         // 自带底色的子区 → 恢复浅色主题默认文字色（黑字），避免白字压在浅色底上。
+        // 注意：composer 容器本身不进任何作用域——它默认即浅色主题黑字，
+        // 提问/审批/计划卡片渲染在 composer 内且自带浅色背景，黑字正好可读；
+        // 欢迎语标题由上面的 [class$="_headlineText"] 单独染白。
         lines.push(
           'body:not([data-ds-dark-theme]) [data-slot="conversation.chat.node"],'
           + 'body:not([data-ds-dark-theme]) [data-slot="conversation.composer.bar"],'

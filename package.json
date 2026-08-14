@@ -1,7 +1,7 @@
 {
   "name": "dsh-bg-beautify",
-  "version": "0.1.0",
-  "description": "背景图 + 面板半透明美化插件 for the DeepSeek Harness Web UI — with a live settings page, installed as a plugin without touching any source file.",
+  "version": "0.1.2",
+  "description": "背景图 + 面板半透明美化插件 for the DeepSeek Harness Web UI — with a live settings page, installed as a plugin without touching any source file. 提问/审批卡片黑字可读。",
   "keywords": [
     "deepseek-harness",
     "dsh",
