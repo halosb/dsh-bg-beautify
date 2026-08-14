@@ -1,3 +1,7 @@
+// dsh-bg-beautify
+// 作者：芝麻 (halosb)
+// 邮箱：i@halosb.com
+// License: MIT
 /**
  * dsh-bg-beautify — Node (host) half.
  *

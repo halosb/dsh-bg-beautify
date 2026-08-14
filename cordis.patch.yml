@@ -1,4 +1,6 @@
 # dsh-bg-beautify — 组合包 patch 层
+# 作者：芝麻 (halosb) <i@halosb.com>
+# License: MIT
 #
 # 只插入一行：让 loader 在双平面挂载本包。所有美化逻辑都在浏览器端
 # （./client.js），由 dsh-client-modules 通过 /plugins/dsh-bg-beautify/client.js
