@@ -35,7 +35,7 @@ const CONFIG_PATH = fileURLToPath(new URL('./config.json', import.meta.url))
 
 /** Defaults (must match the client bundle's DEFAULTS). */
 const DEFAULT_CONFIG = {
-  image: '/bg/1.png',
+  image: '',                 // '' = 无图（只做半透明）
   size: 'cover',
   position: 'center',
   fixed: false,
@@ -44,10 +44,16 @@ const DEFAULT_CONFIG = {
   opacityCard: 0.7,
   opacityInput: 0.75,
   textColor: 'white',
-  scrim: false,
+  scrim: true,
   brandIcon: '',
   welcomeText: '',
   titleSuffix: '',
+  glowEnabled: true,       // 输入框呼吸光晕开关（默认开启）
+  glowColor: '#e8a8d0',    // 光晕主色
+  glowSpeed: 2,            // 光晕速度：一个呼吸周期（秒）
+  glowCross: true,         // 使用交叉色（主色 ↔ 交叉色交替）
+  glowCrossColor: '#9ec5ff', // 交叉色
+  glowStrength: 0.45,      // 光晕强度 0~1.5
 }
 
 /** Upload cap: 25 MiB. Settings body cap: 64 KiB. */
@@ -128,6 +134,16 @@ function sanitizeSettings(input) {
   if (typeof input.brandIcon === 'string') out.brandIcon = input.brandIcon
   if (typeof input.welcomeText === 'string') out.welcomeText = input.welcomeText
   if (typeof input.titleSuffix === 'string') out.titleSuffix = input.titleSuffix
+  if (typeof input.glowEnabled === 'boolean') out.glowEnabled = input.glowEnabled
+  if (typeof input.glowColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.glowColor)) out.glowColor = input.glowColor
+  if (typeof input.glowSpeed === 'number' && Number.isFinite(input.glowSpeed)) {
+    out.glowSpeed = Math.min(10, Math.max(0.3, input.glowSpeed))
+  }
+  if (typeof input.glowCross === 'boolean') out.glowCross = input.glowCross
+  if (typeof input.glowCrossColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.glowCrossColor)) out.glowCrossColor = input.glowCrossColor
+  if (typeof input.glowStrength === 'number' && Number.isFinite(input.glowStrength)) {
+    out.glowStrength = Math.min(1.5, Math.max(0, input.glowStrength))
+  }
   return out
 }
 

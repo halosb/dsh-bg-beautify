@@ -25,7 +25,7 @@ window.__ModuleLoader__.load({
 
     // ── 默认值（首次运行 / 未设置时的初始外观） ────────────────────────────
     var DEFAULTS = {
-      image: '/bg/1.png',        // '' = 无图（只做半透明）
+      image: '',                 // '' = 无图（只做半透明）
       size: 'cover',             // cover / contain / 具体尺寸
       position: 'center',        // CSS background-position
       fixed: false,              // true = 背景固定；false = 随页面滚动（大图更清晰）
@@ -34,10 +34,16 @@ window.__ModuleLoader__.load({
       opacityCard: 0.7,          // 卡片 / 菜单 / 浮层
       opacityInput: 0.75,        // 输入区
       textColor: 'white',        // 文字颜色：white / black / auto（跟随主题）
-      scrim: false,              // 背景纱幕：叠加半透明纱幕增强整体对比
+      scrim: true,               // 背景纱幕：叠加半透明纱幕增强整体对比
       brandIcon: '',             // 品牌：浏览器图标（favicon），/bg/xxx、外链或 data URI；留空=默认
       welcomeText: '',           // 品牌：空会话欢迎语；留空=默认
       titleSuffix: '',           // 品牌：浏览器标签页标题后缀；留空=默认
+      glowEnabled: true,         // 输入框呼吸光晕开关（默认开启）
+      glowColor: '#e8a8d0',      // 光晕颜色
+      glowSpeed: 2,              // 光晕速度：一个呼吸周期（秒）
+      glowCross: true,           // 使用交叉色：主色 ↔ 交叉色交替
+      glowCrossColor: '#9ec5ff', // 交叉色
+      glowStrength: 0.45,        // 光晕强度 0~1.5
     }
 
     // ── Section UI stylesheet (DSH design language, theme tokens only) ──────
@@ -74,6 +80,7 @@ window.__ModuleLoader__.load({
       '.dsh-bgb-check{width:16px;height:16px;accent-color:var(--dsw-alias-state-business-primary);cursor:pointer;}',
       '.dsh-bgb-value{flex:none;width:38px;text-align:right;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;}',
       '.dsh-bgb-checkText{font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);cursor:pointer;}',
+      '.dsh-bgb-color{width:44px;height:28px;padding:0;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:none;cursor:pointer;}',
     ].join('\n')
 
     /** Tiny observable store shared by apply() and the settings component. */
@@ -184,6 +191,57 @@ window.__ModuleLoader__.load({
       return tokens
     }
 
+    /** #rrggbb → rgba(r,g,b,a)；非法值回退默认粉色。 */
+    function hexToRgba(hex, alpha) {
+      var h = String(hex).replace('#', '')
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+      var n = parseInt(h, 16)
+      var a = Math.round(alpha * 1000) / 1000
+      if (isNaN(n) || h.length !== 6) return 'rgba(232,168,208,' + a + ')'
+      return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')'
+    }
+
+    /** 输入框呼吸光晕：整圈均匀弥散软光呼吸（demo 同款），
+     * 四周整圈彩色柔光按 abab… 铺满、顺时针匀速流转——在光晕背后叠一层
+     * 贴周旋转色晕（conic 8 段 ABAB 软交替，透明度清晰、模糊适中），
+     * 颜色随呼吸同周期互换；无任何光点/灯带/线条/硬边，只有朦胧的光。 */
+    function buildGlowCss(s) {
+      if (s.glowEnabled !== true) return ''
+      var strength = Math.min(1.5, Math.max(0, s.glowStrength))
+      var speed = Number(s.glowSpeed)
+      if (!isFinite(speed) || speed <= 0) speed = 1.8
+      speed = Math.min(10, Math.max(0.3, speed))
+      var bSmall = Math.round(6 + strength * 5)
+      var sSmall = Math.round(2 + strength * 2.5)
+      var bBig = Math.round(10 + strength * 11)
+      var sBig = Math.round(4 + strength * 5.5)
+      // 色晕外扩/模糊随强度缩放：强度 0 ≈16px 贴周，强度上限 1.5 ≈43px
+      var washInset = Math.round(16 + strength * 18)
+      var washBlur = Math.round(6 + strength * 4)
+      var washRadius = 22 + washInset
+      var alpha = Math.min(1, 0.5 + strength * 0.32)
+      var mainC = hexToRgba(s.glowColor, alpha)
+      var crossC = s.glowCross === true ? hexToRgba(s.glowCrossColor, alpha) : mainC
+      return [
+        // 共享变色变量（inherits:true，色晕继承同款变色；c 与 cd 相位相反）
+        '@property --dsh-bgb-c{syntax:"<color>";inherits:true;initial-value:' + mainC + ';}',
+        '@property --dsh-bgb-cd{syntax:"<color>";inherits:true;initial-value:' + crossC + ';}',
+        '@property --dsh-bgb-angle{syntax:"<angle>";inherits:false;initial-value:0deg;}',
+        // 呼吸光晕（主导）：整圈均匀 box-shadow，尺寸+颜色同周期线性
+        '[data-composer-card]{animation:dsh-bgb-breathe ' + speed + 's linear infinite,dsh-bgb-colorcycle ' + speed + 's linear infinite,dsh-bgb-colorcycle2 ' + speed + 's linear infinite;}',
+        '@keyframes dsh-bgb-breathe{0%{box-shadow:0 0 ' + bSmall + 'px ' + sSmall + 'px var(--dsh-bgb-c);}50%{box-shadow:0 0 ' + bBig + 'px ' + sBig + 'px var(--dsh-bgb-c);}100%{box-shadow:0 0 ' + bSmall + 'px ' + sSmall + 'px var(--dsh-bgb-c);}}',
+        '@keyframes dsh-bgb-colorcycle{0%{--dsh-bgb-c:' + mainC + ';}50%{--dsh-bgb-c:' + crossC + ';}100%{--dsh-bgb-c:' + mainC + ';}}',
+        '@keyframes dsh-bgb-colorcycle2{0%{--dsh-bgb-cd:' + crossC + ';}50%{--dsh-bgb-cd:' + mainC + ';}100%{--dsh-bgb-cd:' + crossC + ';}}',
+        // 四周彩色流转：贴周旋转色晕（8 段 ABAB 软交替、整圈铺满），
+        // 盒子形状 = 输入框形状 + 等距外扩 40px（圆角 22+40=62px），
+        // 保证上下左右完全同等大小，无十字架式不均匀凸起
+        '[data-composer-card]::before{content:"";position:absolute;inset:-' + washInset + 'px;border-radius:' + washRadius + 'px;pointer-events:none;z-index:-1;filter:blur(' + washBlur + 'px);background:conic-gradient(from var(--dsh-bgb-angle),var(--dsh-bgb-c) 0deg,var(--dsh-bgb-cd) 45deg,var(--dsh-bgb-c) 90deg,var(--dsh-bgb-cd) 135deg,var(--dsh-bgb-c) 180deg,var(--dsh-bgb-cd) 225deg,var(--dsh-bgb-c) 270deg,var(--dsh-bgb-cd) 315deg,var(--dsh-bgb-c) 360deg);animation:dsh-bgb-rotate ' + speed + 's linear infinite,dsh-bgb-glowbreathe ' + speed + 's linear infinite;}',
+        '@keyframes dsh-bgb-rotate{to{--dsh-bgb-angle:360deg}}',
+        '@keyframes dsh-bgb-glowbreathe{0%{opacity:0.45;}50%{opacity:0.7;}100%{opacity:0.45;}}',
+        '@media (prefers-reduced-motion: reduce){[data-composer-card]{animation:none;}[data-composer-card]::before{animation:none;}}',
+      ].join('\n')
+    }
+
     /** Services this client plugin needs (fiber inject). */
     exports.inject = ['theme', 'slots']
 
@@ -224,7 +282,7 @@ window.__ModuleLoader__.load({
           if (styleEl !== null) styleEl.remove()
           styleEl = document.createElement('style')
           styleEl.setAttribute('data-plugin-css', 'dsh-bg-beautify')
-          styleEl.textContent = buildCss(s)
+          styleEl.textContent = buildCss(s) + '\n' + buildGlowCss(s)
           document.head.appendChild(styleEl)
           if (themeDispose !== null) themeDispose()
           var theme = ctx.get('theme')
@@ -370,19 +428,23 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** One labeled range slider row. */
+    /** One labeled range slider row (min/max/step/format overridable). */
     function SliderRow(props) {
+      var min = props.min !== undefined ? props.min : '0'
+      var max = props.max !== undefined ? props.max : '1'
+      var step = props.step !== undefined ? props.step : '0.05'
+      var fmt = props.format !== undefined ? props.format : function (v) { return v.toFixed(2) }
       return el('div', { className: 'dsh-bgb-row' },
         el('div', { className: 'dsh-bgb-rowLabel' },
           el('div', { className: 'dsh-bgb-rowTitle' }, props.label),
         ),
         el('div', { className: 'dsh-bgb-control', style: { flex: '1' } },
           el('input', {
-            type: 'range', min: '0', max: '1', step: '0.05',
+            type: 'range', min: min, max: max, step: step,
             className: 'dsh-bgb-range', value: String(props.value),
             onChange: function (e) { props.onChange(Number(e.target.value)) },
           }),
-          el('span', { className: 'dsh-bgb-value' }, props.value.toFixed(2)),
+          el('span', { className: 'dsh-bgb-value' }, fmt(props.value)),
         ),
       )
     }
@@ -403,12 +465,18 @@ window.__ModuleLoader__.load({
         persist(next)
       }
       function resetAll() {
-        // 只重置透明度到出厂值；背景图、尺寸、位置、固定保持不变。
+        // 重置透明度与光晕设置到出厂值；背景图、尺寸、位置、固定保持不变。
         var next = Object.assign({}, s)
         next.opacityMain = DEFAULTS.opacityMain
         next.opacitySidebar = DEFAULTS.opacitySidebar
         next.opacityCard = DEFAULTS.opacityCard
         next.opacityInput = DEFAULTS.opacityInput
+        next.glowEnabled = DEFAULTS.glowEnabled
+        next.glowColor = DEFAULTS.glowColor
+        next.glowSpeed = DEFAULTS.glowSpeed
+        next.glowCross = DEFAULTS.glowCross
+        next.glowCrossColor = DEFAULTS.glowCrossColor
+        next.glowStrength = DEFAULTS.glowStrength
         store.set(next)
         persist(next)
       }
@@ -431,7 +499,13 @@ window.__ModuleLoader__.load({
       }
       return el('div', { className: 'dsh-bgb-section' },
         el('h2', { className: 'dsh-bgb-title' }, '背景美化'),
-        el('p', { className: 'dsh-bgb-intro' }, '背景图与面板透明度，改动即时生效并持久保存。'),
+        el('p', { className: 'dsh-bgb-intro' }, '背景图、透明度与输入框光晕，改动即时生效并自动保存。'),
+        el('div', { className: 'dsh-bgb-row', style: { borderBottom: 'none', paddingBottom: '4px' } },
+          el('div', { className: 'dsh-bgb-rowLabel' },
+            el('div', { className: 'dsh-bgb-rowTitle', style: { fontSize: '16px', lineHeight: '24px', fontWeight: '500' } }, '背景图修改'),
+            el('div', { className: 'dsh-bgb-caption' }, '背景图与面板透明度。'),
+          ),
+        ),
         Row({
           title: '背景图',
           caption: '支持 /bg/文件名、https:// 外链、data: URI；留空表示不显示图片。',
@@ -447,33 +521,6 @@ window.__ModuleLoader__.load({
           children: el('label', { className: 'dsh-bgb-button', style: { cursor: 'pointer' } },
             el('input', { type: 'file', accept: 'image/*', className: 'dsh-bgb-file', onChange: onUpload }),
             '选择图片…',
-          ),
-        }),
-        SliderRow({ label: '主区透明度', value: s.opacityMain, onChange: function (v) { setField('opacityMain', v) } }),
-        SliderRow({ label: '侧边栏透明度', value: s.opacitySidebar, onChange: function (v) { setField('opacitySidebar', v) } }),
-        SliderRow({ label: '卡片/浮层透明度', value: s.opacityCard, onChange: function (v) { setField('opacityCard', v) } }),
-        SliderRow({ label: '输入区透明度', value: s.opacityInput, onChange: function (v) { setField('opacityInput', v) } }),
-        Row({
-          title: '文字颜色',
-          caption: '只作用于主区（会话/欢迎页）；卡片、菜单、侧边栏保持主题默认，避免看不清。',
-          children: el('select', {
-            className: 'dsh-bgb-input dsh-bgb-select', value: s.textColor,
-            onChange: function (e) { setField('textColor', e.target.value) },
-          },
-            el('option', { value: 'white' }, '白色'),
-            el('option', { value: 'black' }, '黑色'),
-            el('option', { value: 'auto' }, '跟随主题'),
-          ),
-        }),
-        Row({
-          title: '背景纱幕',
-          caption: '在背景图上叠加一层半透明纱幕，整体对比更强（默认关闭）。',
-          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
-            el('input', {
-              type: 'checkbox', className: 'dsh-bgb-check', checked: s.scrim === true,
-              onChange: function (e) { setField('scrim', e.target.checked) },
-            }),
-            '启用',
           ),
         }),
         Row({
@@ -508,6 +555,81 @@ window.__ModuleLoader__.load({
             '固定背景',
           ),
         }),
+        SliderRow({ label: '主区透明度', value: s.opacityMain, onChange: function (v) { setField('opacityMain', v) } }),
+        SliderRow({ label: '侧边栏透明度', value: s.opacitySidebar, onChange: function (v) { setField('opacitySidebar', v) } }),
+        SliderRow({ label: '卡片/浮层透明度', value: s.opacityCard, onChange: function (v) { setField('opacityCard', v) } }),
+        SliderRow({ label: '输入区透明度', value: s.opacityInput, onChange: function (v) { setField('opacityInput', v) } }),
+        Row({
+          title: '文字颜色',
+          caption: '只作用于主区（会话/欢迎页）；卡片、菜单、侧边栏保持主题默认，避免看不清。',
+          children: el('select', {
+            className: 'dsh-bgb-input dsh-bgb-select', value: s.textColor,
+            onChange: function (e) { setField('textColor', e.target.value) },
+          },
+            el('option', { value: 'white' }, '白色'),
+            el('option', { value: 'black' }, '黑色'),
+            el('option', { value: 'auto' }, '跟随主题'),
+          ),
+        }),
+        Row({
+          title: '背景纱幕',
+          caption: '在背景图上叠加一层半透明纱幕，整体对比更强（默认关闭）。',
+          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
+            el('input', {
+              type: 'checkbox', className: 'dsh-bgb-check', checked: s.scrim === true,
+              onChange: function (e) { setField('scrim', e.target.checked) },
+            }),
+            '启用',
+          ),
+        }),
+        el('div', { className: 'dsh-bgb-row', style: { borderBottom: 'none', paddingBottom: '4px' } },
+          el('div', { className: 'dsh-bgb-rowLabel' },
+            el('div', { className: 'dsh-bgb-rowTitle', style: { fontSize: '16px', lineHeight: '24px', fontWeight: '500' } }, '输入框光晕'),
+          ),
+        ),
+        Row({
+          title: '启用呼吸光晕',
+          caption: '输入框外圈持续呼吸发光。',
+          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
+            el('input', {
+              type: 'checkbox', className: 'dsh-bgb-check', checked: s.glowEnabled === true,
+              onChange: function (e) { setField('glowEnabled', e.target.checked) },
+            }),
+            '启用',
+          ),
+        }),
+        Row({
+          title: '光晕颜色',
+          children: el('input', {
+            type: 'color', className: 'dsh-bgb-color', value: s.glowColor,
+            onChange: function (e) { setField('glowColor', e.target.value) },
+          }),
+        }),
+        SliderRow({
+          label: '光晕速度', value: s.glowSpeed, min: '0.3', max: '5', step: '0.1',
+          format: function (v) { return v.toFixed(1) + 's' },
+          onChange: function (v) { setField('glowSpeed', v) },
+        }),
+        Row({
+          title: '使用交叉色',
+          caption: '勾选后光晕在主色与交叉色之间无缝融合交替（默认关闭）。',
+          children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
+            el('input', {
+              type: 'checkbox', className: 'dsh-bgb-check', checked: s.glowCross === true,
+              onChange: function (e) { setField('glowCross', e.target.checked) },
+            }),
+            '启用',
+          ),
+        }),
+        Row({
+          title: '交叉色',
+          caption: '与主色交替的第二颜色。',
+          children: el('input', {
+            type: 'color', className: 'dsh-bgb-color', value: s.glowCrossColor,
+            onChange: function (e) { setField('glowCrossColor', e.target.value) },
+          }),
+        }),
+        SliderRow({ label: '光晕强度', value: s.glowStrength, max: '1.5', onChange: function (v) { setField('glowStrength', v) } }),
         el('div', { className: 'dsh-bgb-row', style: { borderBottom: 'none', paddingBottom: '4px' } },
           el('div', { className: 'dsh-bgb-rowLabel' },
             el('div', { className: 'dsh-bgb-rowTitle', style: { fontSize: '16px', lineHeight: '24px', fontWeight: '500' } }, '品牌定制'),
@@ -544,7 +666,7 @@ window.__ModuleLoader__.load({
         el('div', { className: 'dsh-bgb-row' },
           el('div', { className: 'dsh-bgb-rowLabel' },
             el('div', { className: 'dsh-bgb-rowTitle' }, '恢复默认'),
-            el('div', { className: 'dsh-bgb-caption' }, '仅重置四个透明度到出厂值，背景图与显示方式不变。'),
+            el('div', { className: 'dsh-bgb-caption' }, '重置透明度与光晕设置到出厂值，背景图与显示方式不变。'),
           ),
           el('div', { className: 'dsh-bgb-control' },
             el('button', { type: 'button', className: 'dsh-bgb-button dsh-bgb-buttonPrimary', onClick: resetAll }, '恢复默认'),
