@@ -848,7 +848,8 @@ window.__ModuleLoader__.load({
         next.weKind = ''
         store.set(next)
         persist(next)
-        weState[1](Object.assign({}, weState[0], { msg: preview !== '' ? '已用预览图，正在尝试公开预览视频…' : '正在尝试公开预览视频…' }))
+        // 注意：必须用函数式更新器（回调闭包里的 weState[0] 是过期值，直接合并会清空列表）
+        weState[1](function (prev) { return Object.assign({}, prev, { msg: preview !== '' ? '已用预览图，正在尝试公开预览视频…' : '正在尝试公开预览视频…' }) })
         if (preview === '') return
         fetch('/bg/we/video/' + encodeURIComponent(item.id))
           .then(function (r) { return r.json() })
@@ -861,16 +862,16 @@ window.__ModuleLoader__.load({
               n2.weKind = ''
               store.set(n2)
               persist(n2)
-              weState[1](Object.assign({}, weState[0], { msg: '已升级为公开预览视频' }))
+              weState[1](function (prev) { return Object.assign({}, prev, { msg: '已升级为公开预览视频' }) })
             } else {
-              weState[1](Object.assign({}, weState[0], {
+              weState[1](function (prev) { return Object.assign({}, prev, {
                 msg: (data !== null && typeof data === 'object' && typeof data.message === 'string'
                   ? data.message : '未找到预览视频') + '，已用预览图',
-              }))
+              }) })
             }
           })
           .catch(function () {
-            weState[1](Object.assign({}, weState[0], { msg: '获取预览失败，已用预览图' }))
+            weState[1](function (prev) { return Object.assign({}, prev, { msg: '获取预览失败，已用预览图' }) })
           })
       }
 
@@ -893,9 +894,8 @@ window.__ModuleLoader__.load({
         }).catch(function () {})
       }
       function convertWe(item) {
-        var w = weState[0]
-        weState[1](Object.assign({}, w, { msg: '正在转换「' + item.title + '」…' }))
-        convState[1](Object.assign({}, convState[0], { job: null, progress: 0, running: true }))
+        weState[1](function (prev) { return Object.assign({}, prev, { msg: '正在转换「' + item.title + '」…' }) })
+        convState[1](function (prev) { return Object.assign({}, prev, { job: null, progress: 0, running: true }) })
         fetch('/bg/we/convert', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -906,16 +906,16 @@ window.__ModuleLoader__.load({
             if (data !== null && typeof data === 'object' && data.ok === true && typeof data.job === 'string') {
               pollJob(data.job)
             } else {
-              convState[1](Object.assign({}, convState[0], { running: false }))
-              weState[1](Object.assign({}, weState[0], {
+              convState[1](function (prev) { return Object.assign({}, prev, { running: false }) })
+              weState[1](function (prev) { return Object.assign({}, prev, {
                 msg: (data !== null && typeof data === 'object' && typeof data.message === 'string')
                   ? data.message : '转换请求失败',
-              }))
+              }) })
             }
           })
           .catch(function () {
-            convState[1](Object.assign({}, convState[0], { running: false }))
-            weState[1](Object.assign({}, weState[0], { msg: '转换请求失败' }))
+            convState[1](function (prev) { return Object.assign({}, prev, { running: false }) })
+            weState[1](function (prev) { return Object.assign({}, prev, { msg: '转换请求失败' }) })
           })
       }
       function pollJob(jobId, applyFirst) {
@@ -925,8 +925,8 @@ window.__ModuleLoader__.load({
           .then(function (job) {
             if (job === null || typeof job !== 'object') return
             if (job.state === 'done') {
-              convState[1](Object.assign({}, convState[0], { job: null, progress: 100, running: false }))
-              weState[1](Object.assign({}, weState[0], { msg: job.message || '转换完成' }))
+              convState[1](function (prev) { return Object.assign({}, prev, { job: null, progress: 100, running: false }) })
+              weState[1](function (prev) { return Object.assign({}, prev, { msg: job.message || '转换完成' }) })
               if (apply && Array.isArray(job.files) && job.files.length > 0) {
                 var f = job.files[0]
                 var next = Object.assign({}, store.get())
@@ -940,22 +940,22 @@ window.__ModuleLoader__.load({
               return
             }
             if (job.state === 'error') {
-              convState[1](Object.assign({}, convState[0], { job: null, running: false }))
-              weState[1](Object.assign({}, weState[0], { msg: job.message || '转换失败' }))
+              convState[1](function (prev) { return Object.assign({}, prev, { job: null, running: false }) })
+              weState[1](function (prev) { return Object.assign({}, prev, { msg: job.message || '转换失败' }) })
               return
             }
             // running：更新进度继续轮询
-            convState[1](Object.assign({}, convState[0], {
+            convState[1](function (prev) { return Object.assign({}, prev, {
               job: jobId,
               progress: typeof job.progress === 'number' ? job.progress : 0,
               running: true,
-            }))
-            if (job.message !== undefined) weState[1](Object.assign({}, weState[0], { msg: job.message }))
+            }) })
+            if (job.message !== undefined) weState[1](function (prev) { return Object.assign({}, prev, { msg: job.message }) })
             setTimeout(function () { pollJob(jobId, apply) }, 400)
           })
           .catch(function () {
-            convState[1](Object.assign({}, convState[0], { job: null, running: false }))
-            weState[1](Object.assign({}, weState[0], { msg: '进度查询失败' }))
+            convState[1](function (prev) { return Object.assign({}, prev, { job: null, running: false }) })
+            weState[1](function (prev) { return Object.assign({}, prev, { msg: '进度查询失败' }) })
           })
       }
       function pickConverted(f) {
