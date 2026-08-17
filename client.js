@@ -799,6 +799,11 @@ window.__ModuleLoader__.load({
                 msg: '',
                 items: data.wallpapers,
               })
+              // 扫描即自动转换：符合条件的场景壁纸由 host 后台转出 mp4/GIF
+              if (typeof data.autoJob === 'string') {
+                weState[1](Object.assign({}, weState[0], { state: 'done', items: data.wallpapers, msg: '扫描完成，正在自动转换符合条件的场景壁纸…' }))
+                pollJob(data.autoJob, false)
+              }
             } else {
               weState[1]({ state: 'error', library: '', error: '扫描结果异常', msg: '', items: [] })
             }
@@ -907,7 +912,8 @@ window.__ModuleLoader__.load({
             weState[1](Object.assign({}, weState[0], { msg: '转换请求失败' }))
           })
       }
-      function pollJob(jobId) {
+      function pollJob(jobId, applyFirst) {
+        var apply = applyFirst !== false // 手动转换默认自动应用首个产物；自动转换不应用
         fetch('/bg/we/job?id=' + encodeURIComponent(jobId))
           .then(function (r) { return r.json() })
           .then(function (job) {
@@ -915,7 +921,7 @@ window.__ModuleLoader__.load({
             if (job.state === 'done') {
               convState[1](Object.assign({}, convState[0], { job: null, progress: 100, running: false }))
               weState[1](Object.assign({}, weState[0], { msg: job.message || '转换完成' }))
-              if (Array.isArray(job.files) && job.files.length > 0) {
+              if (apply && Array.isArray(job.files) && job.files.length > 0) {
                 var f = job.files[0]
                 var next = Object.assign({}, store.get())
                 next.image = f.url
@@ -939,7 +945,7 @@ window.__ModuleLoader__.load({
               running: true,
             }))
             if (job.message !== undefined) weState[1](Object.assign({}, weState[0], { msg: job.message }))
-            setTimeout(function () { pollJob(jobId) }, 400)
+            setTimeout(function () { pollJob(jobId, apply) }, 400)
           })
           .catch(function () {
             convState[1](Object.assign({}, convState[0], { job: null, running: false }))
@@ -1062,14 +1068,23 @@ window.__ModuleLoader__.load({
                   el('div', { className: 'dsh-bgb-weGrid' },
                     weState[0].items.map(function (item) {
                       var selected = item.mediaUrl !== '' && s.image === item.mediaUrl
+                      // 场景徽章：可转换 / 无可用纹理（纯 3D 粒子不显示转换按钮，省时间）
+                      var badge = item.supported
+                        ? typeLabel(item.type)
+                        : (item.type === 'scene'
+                            ? (item.convertible ? '场景 · 可转换' : '场景 · 无可用纹理')
+                            : '不支持 · ' + typeLabel(item.type) + '（点按）')
+                      var titleTip = item.supported
+                        ? ''
+                        : (item.type === 'scene' && item.convertible === false
+                            ? '（纯 3D/粒子场景，无可转换纹理；可用 repkg 转换后手动上传）'
+                            : '（' + item.reason + '；点击尝试其公开预览视频，失败退回预览图）')
                       return el('div', {
                         key: item.id,
                         className: 'dsh-bgb-weItem'
                           + (item.supported ? '' : ' dsh-bgb-weScene')
                           + (selected ? ' dsh-bgb-weSelected' : ''),
-                        title: item.title + (item.supported
-                          ? ''
-                          : '（' + item.reason + '；点击尝试其公开预览视频，失败退回预览图）'),
+                        title: item.title + titleTip,
                         onClick: item.supported
                           ? function () { pickWe(item) }
                           : function () { pickUnsupported(item) },
@@ -1078,22 +1093,24 @@ window.__ModuleLoader__.load({
                           ? el('img', { className: 'dsh-bgb-weImg', src: item.previewUrl, loading: 'lazy', alt: item.title })
                           : el('div', { className: 'dsh-bgb-weImg dsh-bgb-weNoPreview' }, '🎞'),
                         el('div', { className: 'dsh-bgb-weTitle' }, item.title),
-                        el('div', { className: 'dsh-bgb-weBadge' }, (item.supported ? typeLabel(item.type) : '不支持 · ' + typeLabel(item.type) + '（点按）')),
-                        item.supported
-                          ? null
-                          : el('button', {
+                        el('div', { className: 'dsh-bgb-weBadge' }, badge),
+                        !item.supported && item.type === 'scene' && item.convertible === true
+                          ? el('button', {
                             type: 'button',
                             className: 'dsh-bgb-button dsh-bgb-buttonPrimary',
                             disabled: convState[0].running,
                             style: { height: '24px', padding: '0 8px', borderRadius: '12px', fontSize: '12px', marginTop: '2px' },
                             onClick: function (e) { e.stopPropagation(); convertWe(item) },
-                          }, convState[0].running ? '转换中…' : '转换'),
+                          }, convState[0].running ? '转换中…' : '转换')
+                          : null,
                       )
                     }),
                   ),
                   weState[0].msg !== ''
                     ? el('div', { className: 'dsh-bgb-caption', style: { padding: '0 0 12px' } }, weState[0].msg)
                     : null,
+                  el('div', { className: 'dsh-bgb-caption', style: { padding: '0 0 12px', color: 'var(--dsw-alias-label-tertiary)' } },
+                    '提示：扫描后符合条件的场景壁纸会自动转换并出现在「转换视频」标签；若找不到理想的壁纸，可用 repkg 转换后手动上传。'),
                 ])
           : (weState[0].state === 'error'
               ? el('div', { className: 'dsh-bgb-caption', style: { color: 'var(--dsw-alias-state-danger-primary)', padding: '8px 0 12px' } }, weState[0].error)
@@ -1143,7 +1160,7 @@ window.__ModuleLoader__.load({
               }),
             )
           : (convState[0].loaded
-              ? el('div', { className: 'dsh-bgb-caption', style: { padding: '0 0 12px' } }, '还没有转换过的内容：在壁纸网格里点场景壁纸的「转换」按钮（纯内置转换，无需外部工具）。')
+              ? el('div', { className: 'dsh-bgb-caption', style: { padding: '0 0 12px' } }, '还没有转换过的内容：扫描 WE 壁纸库后符合条件的场景壁纸会自动转换；也可在壁纸网格上手动点「转换」。')
               : null),
           )
           : null,

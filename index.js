@@ -37,7 +37,7 @@ import { readFile, writeFile, readdir, access, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { join, normalize, basename, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { extractVideoMp4s, extractGifTextures } from './we-convert.js'
+import { extractVideoMp4s, extractGifTextures, probeTextures } from './we-convert.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -467,6 +467,37 @@ async function findPreviewFile(folder, proj) {
   return null
 }
 
+/** 定位壁纸目录里的包文件：优先 scene.pkg，否则目录内任意 .pkg。 */
+async function resolvePkgFile(folder) {
+  if (existsSync(join(folder, 'scene.pkg'))) return 'scene.pkg'
+  try {
+    const entries = await readdir(folder, { withFileTypes: true })
+    for (const e of entries) {
+      if (e.isFile() && /\.pkg$/i.test(e.name)) return e.name
+    }
+  } catch { /* 忽略 */ }
+  return null
+}
+
+/** 可转换性探测缓存（会话内；scene.pkg 基本不变）。 */
+const convertProbeCache = new Map()
+
+/** 探测场景包是否含视频纹理 / 动画序列（只读头部、不解码像素）。 */
+async function probeConvertible(folder) {
+  const cached = convertProbeCache.get(folder)
+  if (cached !== undefined) return cached
+  const result = { video: false, gif: false }
+  try {
+    const pkgName = await resolvePkgFile(folder)
+    if (pkgName !== null) {
+      const pkgBuf = await readFile(join(folder, pkgName))
+      Object.assign(result, probeTextures(pkgBuf))
+    }
+  } catch { /* 保持 false */ }
+  convertProbeCache.set(folder, result)
+  return result
+}
+
 /** One picker entry for a wallpaper folder. */
 async function buildWeEntry(folder, id) {
   const proj = await readProject(folder)
@@ -492,6 +523,12 @@ async function buildWeEntry(folder, id) {
     supported = file !== ''
     if (supported) mediaUrl = '/bg/we/web/' + encodeURIComponent(id) + '/'
   }
+  // scene 型：探测是否含可转换纹理（视频纹理/动画序列），供自动转换与按钮显隐。
+  let convertible = false
+  if (type === 'scene') {
+    const probe = await probeConvertible(folder)
+    convertible = probe.video || probe.gif
+  }
   const title = proj !== null && typeof proj.title === 'string' && proj.title.trim() !== ''
     ? proj.title.trim().slice(0, 80) : id
   const preview = await findPreviewFile(folder, proj)
@@ -500,6 +537,7 @@ async function buildWeEntry(folder, id) {
     title,
     type,
     supported,
+    convertible,
     reason: supported ? '' : (type === 'scene' || type === 'videostream'
       ? '需要 Wallpaper Engine 渲染器' : '缺少可用的媒体文件'),
     previewUrl: preview !== null ? '/bg/we/preview/' + encodeURIComponent(id) : '',
@@ -530,11 +568,31 @@ async function handleWeList(req, res, query) {
   let manual = typeof settings.wePath === 'string' ? settings.wePath.trim() : ''
   const qp = query.get('path')
   if (qp !== null && qp !== '') manual = qp
+  // ?auto=0 关闭自动转换（测试/调试用）
+  const autoConvert = query.get('auto') !== '0'
   const dirs = await detectSteamAppsDirs()
   const folders = await listWallpaperFolders(manual, dirs)
   const wallpapers = []
-  for (const [folder, id] of folders) wallpapers.push(await buildWeEntry(folder, id))
+  const idToFolder = new Map()
+  for (const [folder, id] of folders) {
+    idToFolder.set(id, folder)
+    wallpapers.push(await buildWeEntry(folder, id))
+  }
   wallpapers.sort((a, b) => String(a.title).localeCompare(String(b.title), 'zh'))
+  // 自动转换：扫描到"含可用纹理的场景壁纸"且尚未转换过的，后台自动转出
+  // mp4/GIF（跳过已转换的，避免重复产出）。
+  let autoJob = null
+  if (autoConvert) {
+    const pending = []
+    let existing = []
+    try { existing = await readdir(CONVERT_DIR) } catch { /* 目录可能不存在 */ }
+    for (const w of wallpapers) {
+      if (w.type === 'scene' && w.convertible === true && !existing.some((n) => n.startsWith(w.id + '-'))) {
+        pending.push(w.id)
+      }
+    }
+    if (pending.length > 0) autoJob = startAutoConvertJob(pending, idToFolder)
+  }
   let library = manual !== '' && existsSync(manual) ? manual : ''
   if (library === '') {
     for (const d of dirs) {
@@ -545,7 +603,7 @@ async function handleWeList(req, res, query) {
       }
     }
   }
-  json(res, 200, { ok: true, library, count: wallpapers.length, wallpapers })
+  json(res, 200, { ok: true, library, count: wallpapers.length, wallpapers, autoJob })
 }
 
 /** GET /bg/we/preview/<id> or /bg/we/media/<id> — serve one wallpaper file. */
@@ -821,20 +879,10 @@ async function handleWeConvert(req, res) {
   const proj = await readProject(folder)
   // WE 的 project.json 里 file 字段是场景定义（scene.json），不是包文件本体；
   // 实际包固定叫 scene.pkg（兜底：目录里找 .pkg 文件）。
-  let pkgName = 'scene.pkg'
-  if (!existsSync(join(folder, pkgName))) {
-    let found = null
-    try {
-      const entries = await readdir(folder, { withFileTypes: true })
-      for (const e of entries) {
-        if (e.isFile() && /\.pkg$/i.test(e.name)) { found = e.name; break }
-      }
-    } catch { /* 目录读不到则走空 */ }
-    if (found === null) {
-      json(res, 200, { ok: false, message: '壁纸目录里没有可转换的 pkg 文件' })
-      return
-    }
-    pkgName = found
+  const pkgName = await resolvePkgFile(folder)
+  if (pkgName === null) {
+    json(res, 200, { ok: false, message: '壁纸目录里没有可转换的 pkg 文件' })
+    return
   }
   const title = proj !== null && typeof proj.title === 'string' && proj.title.trim() !== ''
     ? proj.title.trim().slice(0, 60) : id
@@ -898,6 +946,61 @@ async function handleWeConvert(req, res) {
   })()
 
   json(res, 200, { ok: true, job: jobId, dir: CONVERT_DIR })
+}
+
+/** 自动转换单张场景壁纸（跳过逻辑在调用方）；返回产出文件名数组或 null。 */
+async function autoConvertOne(id, idToFolder) {
+  const folder = idToFolder !== undefined && idToFolder !== null ? idToFolder.get(id) : undefined
+  if (folder === undefined) return null
+  const proj = await readProject(folder)
+  const pkgName = await resolvePkgFile(folder)
+  if (pkgName === null) return null
+  const pkgBuf = await readFile(join(folder, pkgName))
+  const items = [...(await extractVideoMp4s(pkgBuf)), ...(await extractGifTextures(pkgBuf))]
+  if (items.length === 0) return null
+  const title = proj !== null && typeof proj.title === 'string' && proj.title.trim() !== ''
+    ? proj.title.trim().slice(0, 60) : id
+  const added = []
+  let n = 0
+  for (const item of items) {
+    const isGif = item.gif !== undefined
+    const buf = isGif ? item.gif : item.mp4
+    const stem = `${id}-${title}${items.length > 1 ? '-' + (++n) : ''}`
+    const dest = join(CONVERT_DIR, uniquePath(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4')))
+    try {
+      await writeFile(dest, buf)
+      added.push(basename(dest))
+    } catch { /* 单个失败继续 */ }
+  }
+  return added.length > 0 ? added : null
+}
+
+/** 启动"扫描后自动转换"后台作业（逐张转换、带进度，客户端轮询 /bg/we/job）。 */
+function startAutoConvertJob(ids, idToFolder) {
+  const jobId = `conv${++convertJobSeq}`
+  const job = { state: 'running', progress: 0, message: '自动转换中…', files: null }
+  convertJobs.set(jobId, job)
+  if (convertJobs.size > 5) {
+    const oldest = convertJobs.keys().next().value
+    convertJobs.delete(oldest)
+  }
+  const total = ids.length
+  void (async () => {
+    let done = 0
+    for (const id of ids) {
+      try {
+        await autoConvertOne(id, idToFolder)
+      } catch { /* 单张失败继续 */ }
+      done++
+      job.progress = Math.round((done / total) * 100)
+      job.message = `自动转换 ${done}/${total}…`
+      await new Promise((r) => setImmediate(r))
+    }
+    job.state = 'done'
+    job.message = `自动转换完成：${done}/${total} 张，可在「转换视频」标签查看`
+    job.progress = 100
+  })()
+  return jobId
 }
 
 export function apply(ctx) {

@@ -173,6 +173,36 @@ export function parseTex(buf) {
 }
 
 /**
+ * 头部级探测：PKG 是否含视频纹理 / 动画序列（不解码像素，供扫描标记可转换）。
+ * @param {Buffer} pkgBuf
+ * @returns {{video: boolean, gif: boolean}}
+ */
+export function probeTextures(pkgBuf) {
+  if (!Buffer.isBuffer(pkgBuf) || pkgBuf.length < 16) return { video: false, gif: false }
+  let pkg
+  try {
+    pkg = parsePkg(pkgBuf)
+  } catch {
+    return { video: false, gif: false }
+  }
+  const result = { video: false, gif: false }
+  for (const e of pkg.entries) {
+    if (!/\.tex$/i.test(e.path) || e.data.length < 8) continue
+    let tex
+    try {
+      tex = parseTex(e.data)
+    } catch {
+      continue
+    }
+    if (tex === null) continue
+    if ((tex.flags & 32) !== 0 || tex.imageFormat === 35) result.video = true
+    else if ((tex.flags & 4) !== 0) result.gif = true
+    if (result.video && result.gif) break
+  }
+  return result
+}
+
+/**
  * 从场景 PKG 提取全部视频纹理 mp4。
  * @param {Buffer} pkgBuf
  * @param {(done: number, total: number) => void} [onProgress] 逐条目进度回调

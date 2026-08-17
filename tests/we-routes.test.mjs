@@ -2,7 +2,7 @@
 // Builds a fake Steam library tree, mounts the plugin with a mock webServer,
 // and exercises /bg/we/list, /bg/we/preview/<id>, /bg/we/media/<id>,
 // path-traversal guards, and the unchanged /bg asset route.
-import { mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdir, writeFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
@@ -37,6 +37,28 @@ await writeFile(join(CONTENT, '1003', 'index.html'),
 await writeFile(join(CONTENT, '1003', 'assets', 'bg.png'), Buffer.from([1, 2, 3, 4]))
 await writeFile(join(CONTENT, '1003', 'evil.exe'), Buffer.from([0x4d, 0x5a]))
 await writeFile(join(CONTENT, '1003', 'preview.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 7, 8, 9]))
+// 1004：含 GIF 动画序列纹理的场景（scene.pkg 内嵌一个 IsGif TEX）→ 应标记可转换
+function i32(v) { const b = Buffer.alloc(4); b.writeInt32LE(v); return b }
+function strI32(s) { const b = Buffer.from(s, 'utf8'); return Buffer.concat([i32(b.length), b]) }
+function nulStr(s) { return Buffer.concat([Buffer.from(s, 'utf8'), Buffer.from([0])]) }
+function f32(v) { const b = Buffer.alloc(4); b.writeFloatLE(v); return b }
+await mkdir(join(CONTENT, '1004'), { recursive: true })
+await writeFile(join(CONTENT, '1004', 'project.json'), JSON.stringify({
+  title: 'Gif Scene', type: 'scene', file: 'scene.json',
+}))
+{
+  const pixels = Buffer.alloc(64)
+  for (let i = 0; i < 16; i++) { pixels[i * 4] = 255; pixels[i * 4 + 3] = 255 }
+  const tex = Buffer.concat([
+    nulStr('TEXV0005'), nulStr('TEXI0001'),
+    i32(0), i32(4), i32(4), i32(4), i32(4), i32(4), i32(0),
+    nulStr('TEXB0002'), i32(1), i32(1), i32(4), i32(4), i32(0), i32(64), i32(64), pixels,
+    nulStr('TEXS0003'), i32(1), i32(4), i32(4), i32(0), f32(0.1), f32(0), f32(0), f32(4), f32(0), f32(0), f32(4),
+  ])
+  const pkg = Buffer.concat([strI32('MTPKG'), i32(1), strI32('textures/seq.tex'), i32(0), i32(tex.length), tex])
+  await writeFile(join(CONTENT, '1004', 'scene.pkg'), pkg)
+}
+await writeFile(join(CONTENT, '1004', 'preview.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 7, 8, 9]))
 
 // persist a manual wePath so media/preview routes resolve
 await writeFile(CONFIG, JSON.stringify({ wePath: CONTENT }))
@@ -86,23 +108,31 @@ async function call(method, url, body) {
 }
 
 // ── /bg/we/list ───────────────────────────────────────────────────────────
-let r = await call('GET', '/bg/we/list?path=' + encodeURIComponent(CONTENT))
+// ?auto=0：关闭扫描自动转换（避免测试把真实库也转一遍）
+let r = await call('GET', '/bg/we/list?auto=0&path=' + encodeURIComponent(CONTENT))
 assert.equal(r.status, 200)
 const list = JSON.parse(r.body.toString('utf8'))
 assert.equal(list.ok, true)
 assert.equal(list.library, CONTENT)
 // 本机若装有真实 Steam + WE，列表会合并真实壁纸；只对模拟条目做存在性断言。
-assert.ok(list.count >= 3, 'at least the fake wallpapers are present')
+assert.ok(list.count >= 4, 'at least the fake wallpapers are present')
+assert.ok(!list.autoJob, 'auto=0 disables auto-convert (autoJob falsy)')
 const video = list.wallpapers.find((w) => w.id === '1001')
 const scene = list.wallpapers.find((w) => w.id === '1002')
 const web = list.wallpapers.find((w) => w.id === '1003')
+const gifScene = list.wallpapers.find((w) => w.id === '1004')
 assert.ok(video !== undefined, 'fake video wallpaper found')
 assert.ok(scene !== undefined, 'fake scene wallpaper found')
 assert.ok(web !== undefined, 'fake web wallpaper found')
+assert.ok(gifScene !== undefined, 'fake gif scene wallpaper found')
 assert.equal(web.type, 'web')
 assert.equal(web.supported, true)
 assert.equal(web.mediaUrl, '/bg/we/web/1003/')
 assert.equal(web.previewUrl, '/bg/we/preview/1003')
+// 可转换性探测：1004（含 GIF 纹理）→ true；1002（垃圾 pkg）→ false
+assert.equal(gifScene.type, 'scene')
+assert.equal(gifScene.convertible, true, 'gif scene is convertible')
+assert.equal(scene.convertible, false, 'junk pkg scene not convertible')
 assert.equal(video.title, 'Aurora Drift')
 assert.equal(video.type, 'video')
 assert.equal(video.supported, true)
@@ -222,6 +252,25 @@ assert.ok((finalJob.message || '').includes('纹理'), 'message explains missing
 r = await call('GET', '/bg/we/job?id=nope')
 assert.equal(r.status, 200)
 assert.equal(JSON.parse(r.body.toString('utf8')).ok, false)
+// 1004（含 GIF 纹理）手动转换 → 产出 GIF 文件（与自动转换同一条提取/写入路径）
+r = await call('POST', '/bg/we/convert', { id: '1004' })
+assert.equal(r.status, 200)
+cv = JSON.parse(r.body.toString('utf8'))
+assert.ok(typeof cv.job === 'string')
+let job2 = null
+for (let i = 0; i < 300; i++) {
+  const jr = await call('GET', '/bg/we/job?id=' + encodeURIComponent(cv.job))
+  job2 = JSON.parse(jr.body.toString('utf8'))
+  if (job2.state === 'done' || job2.state === 'error') break
+  await new Promise((resolve) => setTimeout(resolve, 50))
+}
+assert.ok(job2 !== null && job2.state === 'done', 'gif scene converts')
+assert.ok(Array.isArray(job2.files) && job2.files.length > 0)
+assert.ok(job2.files[0].name.endsWith('.gif'), 'produced a gif')
+// 清理测试产物（1004-* 前缀）
+for (const n of await readdir(convDir)) {
+  if (n.startsWith('1004-')) await rm(join(convDir, n), { force: true })
+}
 const fakeVid = 'test-convert-check.mp4'
 await mkdir(convDir, { recursive: true })
 await writeFile(join(convDir, fakeVid), Buffer.from([0, 0, 0, 24, 102, 116, 121, 112]))
