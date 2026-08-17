@@ -801,7 +801,13 @@ window.__ModuleLoader__.load({
               })
               // 扫描即自动转换：符合条件的场景壁纸由 host 后台转出 mp4/GIF
               if (typeof data.autoJob === 'string') {
-                weState[1](Object.assign({}, weState[0], { state: 'done', items: data.wallpapers, msg: '扫描完成，正在自动转换符合条件的场景壁纸…' }))
+                weState[1]({
+                  state: 'done',
+                  library: typeof data.library === 'string' ? data.library : '',
+                  error: '',
+                  msg: '扫描完成，正在自动转换符合条件的场景壁纸…',
+                  items: data.wallpapers,
+                })
                 pollJob(data.autoJob, false)
               }
             } else {

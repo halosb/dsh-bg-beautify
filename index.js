@@ -34,7 +34,7 @@
  * namespace list to configuration clients).
  */
 import { readFile, writeFile, readdir, access, mkdir } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join, normalize, basename, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extractVideoMp4s, extractGifTextures, probeTextures } from './we-convert.js'
@@ -346,19 +346,27 @@ function vdfLibraryPaths(text) {
   return out
 }
 
-/** Every Steam library's steamapps directory this machine can see. */
+/** Every Steam library's steamapps directory this machine can see.
+ * 用 realpath + 小写键去重：同一库可能经注册表 / 常见路径 / vdf 以不同大小写
+ * 拼写被发现，Windows 路径大小写不敏感，必须规范化否则每张壁纸会列两遍。 */
 async function detectSteamAppsDirs() {
-  const dirs = new Set()
+  const dirs = new Map() // 小写规范化路径 → 真实路径
+  function addApps(p) {
+    if (typeof p !== 'string' || p === '') return
+    let real = p
+    try { real = realpathSync.native(p) } catch { /* 目录不存在则用原样 */ }
+    dirs.set(real.toLowerCase(), real)
+  }
   function addSteam(steamDir) {
     if (typeof steamDir !== 'string' || steamDir === '') return
     const apps = join(steamDir, 'steamapps')
-    if (existsSync(apps)) dirs.add(apps)
+    if (existsSync(apps)) addApps(apps)
     const vdf = join(steamDir, 'steamapps', 'libraryfolders.vdf')
     if (existsSync(vdf)) {
       try {
         for (const p of vdfLibraryPaths(readFileSync(vdf, 'utf8'))) {
           const lib = p.replace(/[\\/]+$/, '')
-          dirs.add(/steamapps$/i.test(lib) ? lib : join(lib, 'steamapps'))
+          addApps(/steamapps$/i.test(lib) ? lib : join(lib, 'steamapps'))
         }
       } catch {
         // unreadable vdf — keep going with what we have
@@ -377,7 +385,7 @@ async function detectSteamAppsDirs() {
     'C:\\SteamLibrary', 'D:\\SteamLibrary', 'E:\\SteamLibrary',
   ]
   for (const c of candidates) if (c !== '') addSteam(c)
-  return [...dirs]
+  return [...dirs.values()]
 }
 
 /** A folder is a WE wallpaper when it contains project.json. */
@@ -397,8 +405,12 @@ async function isWallpaperFolder(folder) {
  */
 async function listWallpaperFolders(manual, steamAppsDirs) {
   const folders = new Map()
+  const seenIds = new Set() // 按壁纸 id 兜底去重（同一张壁纸不因路径拼写重复出现）
   async function addFolder(folder, id) {
-    if (await isWallpaperFolder(folder) && !folders.has(folder)) folders.set(folder, id)
+    if (await isWallpaperFolder(folder) && !seenIds.has(id)) {
+      seenIds.add(id)
+      folders.set(folder, id)
+    }
   }
   async function addRoot(root) {
     let entries
@@ -584,10 +596,14 @@ async function handleWeList(req, res, query) {
   let autoJob = null
   if (autoConvert) {
     const pending = []
+    const seenPending = new Set()
     let existing = []
     try { existing = await readdir(CONVERT_DIR) } catch { /* 目录可能不存在 */ }
     for (const w of wallpapers) {
-      if (w.type === 'scene' && w.convertible === true && !existing.some((n) => n.startsWith(w.id + '-'))) {
+      if (w.type === 'scene' && w.convertible === true
+        && !seenPending.has(w.id)
+        && !existing.some((n) => n.startsWith(w.id + '-'))) {
+        seenPending.add(w.id)
         pending.push(w.id)
       }
     }
