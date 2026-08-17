@@ -1,6 +1,6 @@
 {
   "name": "dsh-bg-beautify",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "背景图 + 面板半透明 + 输入框呼吸光晕(颜色/速度/交叉色) + 视频壁纸 & Wallpaper Engine 库扫描(纯本地,无API) 美化插件 for the DeepSeek Harness Web UI — with a live settings page, installed as a plugin without touching any source file. 提问/审批卡片黑字可读。",
   "keywords": [
     "deepseek-harness",
