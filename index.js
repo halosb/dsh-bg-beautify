@@ -934,12 +934,14 @@ async function handleWeConvert(req, res) {
       job.message = '写入转换文件夹…'
       job.progress = 95
       const added = []
+      let skipped = 0
       let n = 0
       for (const item of items) {
         const isGif = item.gif !== undefined
         const buf = isGif ? item.gif : item.mp4
         const stem = `${id}-${title}${items.length > 1 ? '-' + (++n) : ''}`
-        const dest = join(CONVERT_DIR, uniquePath(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4')))
+        const dest = join(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4'))
+        if (existsSync(dest)) { skipped++; continue } // 已存在：跳过，不再产生 -N 副本
         try {
           await writeFile(dest, buf)
           added.push({ name: basename(dest), url: '/bg/conv/' + encodeURIComponent(basename(dest)) })
@@ -948,10 +950,10 @@ async function handleWeConvert(req, res) {
       job.progress = 100
       if (added.length === 0) {
         job.state = 'error'
-        job.message = '转换完成但写入失败'
+        job.message = skipped > 0 ? '这些内容已经转换过了（已跳过重复）' : '转换完成但写入失败'
       } else {
         job.state = 'done'
-        job.message = `转换完成：${added.length} 个（视频/动画）`
+        job.message = `转换完成：${added.length} 个（视频/动画）${skipped > 0 ? `，跳过 ${skipped} 个已存在` : ''}`
         job.files = added
       }
     } catch (e) {
@@ -982,7 +984,9 @@ async function autoConvertOne(id, idToFolder) {
     const isGif = item.gif !== undefined
     const buf = isGif ? item.gif : item.mp4
     const stem = `${id}-${title}${items.length > 1 ? '-' + (++n) : ''}`
-    const dest = join(CONVERT_DIR, uniquePath(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4')))
+    const dest = join(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4'))
+    // 已存在则跳过：不再产生 -N 重复副本（去重核心）
+    if (existsSync(dest)) continue
     try {
       await writeFile(dest, buf)
       added.push(basename(dest))
