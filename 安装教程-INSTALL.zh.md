@@ -77,12 +77,12 @@ pnpm dsh web          # 默认端口 3080；与其它进程冲突时再用 --por
 # 第二部分：使用（设置页可视化操作）
 
 > 插件自带一个设置分区：**设置 → 背景美化**。所有调整在页面上完成，
-> **即时生效、持久保存**（写入插件目录 `config.json`，重启不丢）。
+> **即时生效、持久保存**（写入 DSH 数据目录 `<DSH_HOME>\plugin-data\<profile>\dsh-bg-beautify\config.json`，重启不丢）。
 
 | 设置 | 说明 |
 |---|---|
 | 背景图（文本框） | 三种写法：`/bg/文件名`（插件 assets 里的本地图）、`https://...` 外链、`data:image/...` 内嵌；留空 = 无图 |
-| 上传本地图片 | 选文件后自动上传到插件 `assets\` 目录，并填入 `/bg/文件名`（推荐，大图用这个） |
+| 上传本地图片 | 选文件后自动上传到 DSH 数据目录的 `assets\`，并填入 `/bg/文件名`（推荐，大图用这个）。同名不会静默覆盖，会自动加 `-2` 序号 |
 | 主区 / 侧边栏 / 卡片浮层 / 输入区 透明度 | 4 个滑块，0（全透）～ 1（不透），**越小背景图越明显** |
 | 输入框呼吸光晕（v0.2.1） | 开关 + 光晕颜色 + **光晕速度**（0.3s~5s）+ **使用交叉色**（开关与第二颜色）+ 光晕强度（0~2）；均匀弥散软光匀速呼吸 + 背后**旋转色晕**（两色 abab 环绕、柔和流转，无灯带/线条） |
 | 尺寸 | `cover`（铺满裁剪）/ `contain`（完整显示）/ `auto` |
@@ -96,8 +96,9 @@ pnpm dsh web          # 默认端口 3080；与其它进程冲突时再用 --por
 ## 换背景图（以本地图片为例）
 
 ```powershell
-# ① 把图片复制进插件的 assets 目录（或用设置页的"上传本地图片"，不用手动复制）
-Copy-Item "D:\你的图片\背景.jpg" "dsh-bg-beautify\assets\background.jpg"
+# ① 推荐直接用设置页的"上传本地图片"，会写进 DSH 数据目录的 assets\。
+#    想手动复制也可以（<DSH_HOME> 默认 %USERPROFILE%\.dsh）：
+Copy-Item "D:\你的图片\背景.jpg" "$env:USERPROFILE\.dsh\plugin-data\web\dsh-bg-beautify\assets\background.jpg"
 ```
 
 ```text
@@ -111,6 +112,7 @@ http://127.0.0.1:3080/bg/background.jpg
 ```
 
 > 为什么不能直接填 `C:\...` 路径：浏览器禁止 http 页面加载本地路径（`file:///` 会被拦截），所以插件让 DSH 自己把 `assets\` 下的文件伺服为 `/bg/文件名`。支持 jpg/png/gif/webp/avif/svg。
+> `/bg/<文件名>` 先在 **用户数据目录** 的 `assets\` 里找，找不到再回退到 **随包** 的 `assets\`（所以仓库里那张默认图依然可用）。
 
 ## 出厂默认值
 
@@ -137,7 +139,7 @@ pnpm dsh plugin --profile web remove dsh-bg-beautify
 pnpm dsh web      # 重启后恢复默认外观（默认端口 3080）
 ```
 
-该命令会同时移除依赖、对应的组合层；插件目录本身保留（`config.json` 是你的设置，一并删除即彻底还原）。
+该命令会同时移除依赖、对应的组合层；你的设置与上传图片在 DSH 数据目录（`<DSH_HOME>\plugin-data\<profile>\dsh-bg-beautify\`），卸载不会删除，要彻底还原就手动删掉该目录。
 
 ## 常见问题
 
@@ -147,7 +149,7 @@ pnpm dsh web      # 重启后恢复默认外观（默认端口 3080）
 | 页面无背景图 | ① 没重启（必须重启）；② 浏览器缓存旧页面，硬刷新 Ctrl+F5 |
 | 设置页里改了没变化 | 设置持久化走 `GET/POST /bg/settings`；Network 里看这个请求是否 200，500 说明插件目录不可写 |
 | 图片地址是 `C:\...` 或 `file:///...` 不显示 | 浏览器禁止 http 页面加载本地路径；改用 `/bg/<文件名>` |
-| `/bg/xxx.jpg` 打开 404 | 文件名大小写不一致 / 没复制进 `assets\` / 格式不支持（支持 jpg/png/gif/webp/avif/svg） |
+| `/bg/xxx.jpg` 打开 404 | 文件名大小写不一致 / 没上传过（上传的图在 DSH 数据目录的 `assets\`）/ 格式不支持（支持 jpg/png/gif/webp/avif/svg） |
 | 背景图发糊 | ① 大图把"背景固定"取消勾选（Chrome 对 fixed 大背景会模糊）；② 透明度调低让图透出来 |
 | AI 提问表单白字看不清 | v0.1.2 起已修复：提问/审批/计划卡片自带浅色背景，强制恢复主题黑字；如仍异常请硬刷新后重试 |
 | Network 里 `/plugins/dsh-bg-beautify/client.js` 404 | `exports["./client"]` 指向的文件不存在或没安装成功；重跑 `pnpm dsh plugin --profile web add` |

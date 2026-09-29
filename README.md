@@ -31,7 +31,7 @@
 1. 本插件是一个 DSH **组合包（bundle）**：`package.json` 声明 `dsh.bundle`（贡献一行组合配置）+ `dsh.client`（声明浏览器端 bundle）。
 2. 安装进 profile 后，loader 挂载 `bg-beautify` 行；`dsh-client-modules` 把 `/plugins/dsh-bg-beautify/client.js` 编入 `window.__DSH_BOOT__` 引导图，浏览器端运行时加载——**无需构建前端**。
 3. 浏览器端 `apply()`：注入 `<style>` 设背景图 + 用官方主题接口 `ctx.theme.overrideTokens(...)` 覆盖面板底色（亮/暗两套）；视频壁纸用 `<video>` 层、网页壁纸用沙箱 `<iframe>` 层。
-4. 设置持久化与 WE 库/转换由插件自己的 host 半边完成（`/bg/settings`、`/bg/we/*`、`/bg/conv/*` → 插件目录 `config.json` 与用户图片目录）。
+4. 设置持久化与 WE 库/转换由插件自己的 host 半边完成（`/bg/settings`、`/bg/we/*`、`/bg/conv/*` → DSH 数据目录 `<DSH_HOME>\plugin-data\<profile>\dsh-bg-beautify\` 下的 `config.json` 与 `assets\`，**不在 pnpm 管理的包目录里**）。
 
 ## 环境要求
 
@@ -121,7 +121,8 @@ pnpm dsh web       # 源码运行环境
 
 ```powershell
 dsh plugin --profile web remove dsh-bg-beautify
-# 重启后恢复默认外观；插件目录里的 config.json 一并删除即彻底还原
+# 重启后恢复默认外观；设置与上传的图片在 <DSH_HOME>\plugin-data\<profile>\dsh-bg-beautify\，
+# 卸载不会删除，要彻底还原就手动删掉该目录
 ```
 
 ## 常见问题
@@ -129,7 +130,7 @@ dsh plugin --profile web remove dsh-bg-beautify
 | 现象 | 处理 |
 |---|---|
 | 页面无背景图 | ① 安装后必须重启 `dsh web`；② 浏览器硬刷新 Ctrl+F5 |
-| `/bg/xxx.jpg` 404 | 文件名大小写不一致 / 没放进 `assets/` / 格式不支持（jpg/png/gif/webp/avif/svg） |
+| `/bg/xxx.jpg` 404 | 文件名大小写不一致 / 没上传过（设置页「上传本地图片」写入 DSH 数据目录的 `assets\`）/ 格式不支持（jpg/png/gif/webp/avif/svg） |
 | WE 扫描不到壁纸 | ① 本机需已安装 Steam + Wallpaper Engine 且壁纸已订阅下载；② 自动探测失败时在"壁纸库路径"手动填 `…\steamapps\workshop\content\431960` 后重新扫描；③ 纯 3D/粒子场景无可用纹理，转换不出动画属正常 |
 | 视频壁纸不播放 | 确认文件为 `.mp4`/`.webm`；浏览器自动播放策略要求静音（插件已强制静音）；标签页在后台或系统开启"减少动态效果"时会暂停并定格预览图（属预期省电行为） |
 | 网页型壁纸显示不全 | 网页壁纸依赖 WE 专有 JS API（已自动注入 no-op 垫片防崩溃）；个别壁纸用 `fetch()` 读取相对资源会因沙箱无同源权限失败，属预期限制 |
@@ -146,8 +147,8 @@ dsh-bg-beautify/
 ├── client.js             # 浏览器 bundle（标签菜单设置页 + 视频/iframe 背景层）
 ├── index.js              # host 半边：/bg、/bg/upload、/bg/settings、/bg/we/*、/bg/conv/* 路由
 ├── we-convert.js         # 内置转换器：PKG/TEX 解析 + LZ4/DXT 解码 + mp4 提取 + GIF 编码（仿 repkg）
-├── assets/               # 背景图（/bg/<文件名> 伺服）
-├── config.json           # 运行时生成：设置持久化（已 gitignore）
+├── convert-worker.js     # 把上面的解码放到 worker 线程，避免阻塞宿主事件循环
+├── assets/               # 随包的默认背景图（/bg/<文件名> 伺服）
 ├── tests/                # 单元/路由测试（we-convert、we-routes）
 ├── README.md
 ├── 安装教程-INSTALL.zh.md
@@ -155,13 +156,22 @@ dsh-bg-beautify/
 └── LICENSE
 ```
 
+运行时数据不在本目录，而在 DSH 数据目录：
+
+```
+<DSH_HOME>\plugin-data\<profile>\dsh-bg-beautify\
+├── config.json    # 你的设置
+└── assets\        # 你上传的背景图（/bg/<文件名> 优先从这里取，再回退到随包 assets/）
+```
+
 ## 开发
 
 - 改 `client.js` 顶部 `DEFAULTS` 可换默认值；改完重启 `dsh web` 生效。
 - 客户端 bundle 内容变化需要重启（或 `pnpm run dev:web` 的 HMR watcher 正在运行）。
-- 测试：`node tests/we-convert.test.mjs`（LZ4/DXT/GIF/提取）、`node tests/we-routes.test.mjs`（路由端到端，含路径穿越防护）。
+- 测试：`node tests/we-convert.test.mjs`（LZ4/DXT/GIF/提取）、`node tests/we-routes.test.mjs`（路由端到端：路径穿越、请求准入、设置合并、上传不覆盖、Range、过期作业、SVG 加固）。两个测试都把数据目录重定向到系统临时目录，跑测试不会碰你已安装的副本。
+- 转换解码跑在 `convert-worker.js`（worker 线程）里，改 `we-convert.js` 后两条测试都要重跑。
 - ⚠️ 源码均为 UTF-8（无 BOM）文本，**请勿用 PowerShell `Get-Content`/`Set-Content` 读写**（会按 GBK 重编码导致中文注释乱码）；一律使用 UTF-8 感知的编辑器/工具。
-- 提交前请勿包含个人图片/配置（`config.json` 已在 `.gitignore`）。
+- 提交前请勿包含个人图片/配置（运行时数据现在都在 DSH 数据目录，仓库里不应再出现 `config.json`）。
 
 ## 反馈
 

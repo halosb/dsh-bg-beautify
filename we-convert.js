@@ -15,8 +15,14 @@
 
 const MP4_MAGICS = ['ftypisom', 'ftypmsnv', 'ftypmp42']
 
+/** LZ4 解压输出的上限：文件头里的 outSize 是不可信输入，不能直接拿去 Buffer.alloc。 */
+const MAX_LZ4_OUT = 256 * 1024 * 1024
+
 /** LZ4 block 解压（原始块格式，无 frame 头；K4os 的 LZ4Codec.Decode 同格式）。 */
 export function lz4BlockDecode(src, outSize) {
+  if (!Buffer.isBuffer(src)) throw new Error('lz4: src must be a Buffer')
+  if (!Number.isInteger(outSize) || outSize < 0) throw new Error('lz4: invalid output size')
+  if (outSize > MAX_LZ4_OUT) throw new Error('lz4: output size exceeds cap')
   const out = Buffer.alloc(outSize)
   let ip = 0
   let op = 0
@@ -25,24 +31,39 @@ export function lz4BlockDecode(src, outSize) {
     let litLen = token >> 4
     if (litLen === 15) {
       let b
-      do { b = src[ip++]; litLen += b } while (b === 255)
+      do {
+        if (ip >= src.length) return out
+        b = src[ip++]
+        litLen += b
+      } while (b === 255)
     }
     if (litLen > 0) {
-      src.copy(out, op, ip, ip + litLen)
-      ip += litLen
-      op += litLen
+      // 越界静默截断：损坏的 LZ4 流不应写出 out 之外，也不该抛到调用方。
+      const avail = Math.min(litLen, src.length - ip)
+      const copyLen = Math.max(0, Math.min(avail, out.length - op))
+      if (copyLen > 0) src.copy(out, op, ip, ip + copyLen)
+      ip += avail
+      op += copyLen
+      if (op >= out.length) break
     }
     if (ip >= src.length) break // 末段可能只有字面量
+    if (ip + 1 >= src.length) break
     const offset = src[ip] | (src[ip + 1] << 8)
     ip += 2
     let matchLen = (token & 0x0f) + 4
     if ((token & 0x0f) === 15) {
       let b
-      do { b = src[ip++]; matchLen += b } while (b === 255)
+      do {
+        if (ip >= src.length) return out
+        b = src[ip++]
+        matchLen += b
+      } while (b === 255)
     }
     if (offset === 0 || offset > op) break // 坏数据保护
-    for (let i = 0; i < matchLen; i++) out[op + i] = out[op + i - offset]
-    op += matchLen
+    const count = Math.max(0, Math.min(matchLen, out.length - op))
+    for (let i = 0; i < count; i++) out[op + i] = out[op + i - offset]
+    op += count
+    if (op >= out.length) break
   }
   return out
 }
@@ -65,12 +86,19 @@ function readNulStr(buf, off, max) {
   return { v: buf.toString('utf8', off, end), next: Math.min(end + 1, buf.length) }
 }
 
-/** 解析 PKG 容器；entries 带 path/offset/length/data。 */
-export function parsePkg(buf) {
+/**
+ * 只解析 PKG 条目表（不切数据区）。
+ * 允许传入"文件前缀"：字节不够读完条目表时 readI32/readStrI32 会抛错，调用方
+ * 读到更多字节后重试即可——扫描时用它避免为了探测把整个包读进内存。
+ * @param {Buffer} buf 完整包或包的前缀
+ * @returns {{magic: string, entries: Array<{path: string, offset: number, length: number}>, dataStart: number}}
+ */
+export function parsePkgTable(buf) {
   let off = 0
   const magic = readStrI32(buf, off)
   off = magic.next
   const entryCount = readI32(buf, off)
+  if (entryCount < 0 || entryCount > 1e6) throw new Error('bad entry count')
   off += 4
   const entries = []
   for (let i = 0; i < entryCount; i++) {
@@ -82,12 +110,19 @@ export function parsePkg(buf) {
     off += 4
     entries.push({ path: p.v, offset, length })
   }
-  const dataStart = off
+  return { magic: magic.v, entries, dataStart: off }
+}
+
+/** 解析 PKG 容器；entries 带 path/offset/length/data。 */
+export function parsePkg(buf) {
+  const table = parsePkgTable(buf)
+  const entries = table.entries
+  const dataStart = table.dataStart
   for (const e of entries) {
     const s = dataStart + e.offset
     e.data = s >= 0 && s + e.length <= buf.length ? buf.subarray(s, s + e.length) : Buffer.alloc(0)
   }
-  return { magic: magic.v, entries }
+  return { magic: table.magic, entries }
 }
 
 /** 解析 TEX；仅保留转换所需字段；非 TEX 或解析失败返回 null。 */

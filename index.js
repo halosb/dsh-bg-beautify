@@ -33,11 +33,13 @@
  * without the host settings-service allowlist (api-proxy only exposes a fixed
  * namespace list to configuration clients).
  */
-import { readFile, writeFile, readdir, access, mkdir } from 'node:fs/promises'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
-import { join, normalize, basename, sep } from 'node:path'
+import { readFile, writeFile, readdir, access, mkdir, open, rename, copyFile, rm, stat } from 'node:fs/promises'
+import { existsSync, readFileSync, realpathSync, createReadStream } from 'node:fs'
+import { join, normalize, basename, sep, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { extractVideoMp4s, extractGifTextures, probeTextures } from './we-convert.js'
+import { homedir } from 'node:os'
+import { Worker } from 'node:worker_threads'
+import { probeTextures, parsePkgTable, parseTex } from './we-convert.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -46,11 +48,30 @@ export const name = 'dsh-bg-beautify'
 /** The webserver service is a hard dependency: every route lives on it. */
 export const inject = ['webServer']
 
-/** This package's assets directory (realpath through the profile link). */
-const ASSETS_DIR = fileURLToPath(new URL('./assets/', import.meta.url))
+/** This package's own directory (realpath through the profile link). */
+const PACKAGE_DIR = fileURLToPath(new URL('.', import.meta.url))
 
-/** This package's persisted settings file. */
-const CONFIG_PATH = fileURLToPath(new URL('./config.json', import.meta.url))
+/** 随包发布的只读资源目录（git 里有 assets/1.png 默认图）。 */
+const BUNDLED_ASSETS_DIR = fileURLToPath(new URL('./assets/', import.meta.url))
+
+/**
+ * 用户数据目录：<DSH_HOME>/plugin-data/<profile>/dsh-bg-beautify/
+ * 刻意放在 pnpm 管理的包目录之外：`dsh plugin update/remove` 会重建包目录，
+ * 老版本把 config.json 和用户上传的图片都写在包内，一次更新就全没了。
+ */
+const DSH_HOME = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME !== ''
+  ? process.env.DSH_HOME
+  : join(homedir(), '.dsh')
+const PROFILE = typeof process.env.DSH_PROFILE === 'string' && process.env.DSH_PROFILE !== ''
+  ? process.env.DSH_PROFILE
+  : 'default'
+const DATA_DIR = join(DSH_HOME, 'plugin-data', PROFILE, 'dsh-bg-beautify')
+
+/** 用户上传的背景图目录（数据目录内，写入目标）。 */
+const ASSETS_DIR = join(DATA_DIR, 'assets')
+
+/** 持久化设置文件（数据目录内）。 */
+const CONFIG_PATH = join(DATA_DIR, 'config.json')
 
 /**
  * repkg 转换视频专用目录（用户可见、一键打开管理）：
@@ -95,6 +116,9 @@ const DEFAULT_CONFIG = {
 /** Upload cap: 25 MiB. Settings body cap: 64 KiB. */
 const MAX_UPLOAD = 25 * 1024 * 1024
 const MAX_SETTINGS = 64 * 1024
+
+/** 转换作业表保留条数（只淘汰已结束的作业，正在跑的不动）。 */
+const MAX_JOBS = 8
 
 /** Image content types by extension (GET serving). */
 const CONTENT_TYPES = {
@@ -244,14 +268,99 @@ function safeName(name, fallbackExt) {
   return `${safeStem}${allowedExt(base) ? ext : fallbackExt}`
 }
 
+/** 运行期告警（读失败、迁移结果等），随 /bg/settings 回给设置页显示。 */
+const warnings = []
+function warn(message) {
+  if (warnings.length < 20) warnings.push(message)
+  console.warn('[dsh-bg-beautify]', message)
+}
+
+/** 原子写 JSON：同目录临时文件 + rename；并发写用 settingsWrite 串行化。 */
+async function writeJsonAtomic(path, value) {
+  await mkdir(dirname(path), { recursive: true })
+  const temp = `${path}.${process.pid}.${Date.now()}.tmp`
+  try {
+    await writeFile(temp, JSON.stringify(value, null, 2))
+    await rename(temp, path)
+  } catch (error) {
+    await rm(temp, { force: true })
+    throw error
+  }
+}
+
+/**
+ * 老版本把 config.json 和上传的图片都放在包目录（node_modules 内）。
+ * 首次启动搬到数据目录；不删除包内自带的 assets/1.png（那是 git 跟踪的默认图），
+ * 伺服时用户目录优先、包内目录兜底。
+ */
+async function migrateLegacyData() {
+  await mkdir(ASSETS_DIR, { recursive: true })
+  const legacyConfig = join(PACKAGE_DIR, 'config.json')
+  try {
+    await stat(CONFIG_PATH)
+  } catch {
+    try {
+      await copyFile(legacyConfig, CONFIG_PATH)
+      await rm(legacyConfig, { force: true })
+      warn('已把 config.json 从插件目录迁移到数据目录')
+    } catch { /* 没有老配置 */ }
+  }
+  let entries = []
+  try {
+    entries = await readdir(BUNDLED_ASSETS_DIR, { withFileTypes: true })
+  } catch {
+    return
+  }
+  let moved = 0
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const target = join(ASSETS_DIR, entry.name)
+    try {
+      await stat(target)
+      continue // 用户目录已有同名文件，保留它
+    } catch { /* 目标不存在才复制 */ }
+    try {
+      await copyFile(join(BUNDLED_ASSETS_DIR, entry.name), target)
+      moved += 1
+    } catch { /* 忽略单个失败 */ }
+  }
+  if (moved > 0) warn(`已把 ${moved} 张背景图导入数据目录`)
+}
+
+/** 设置缓存：原来每个 WE 路由、每次请求都要读盘 + 解析一次。 */
+let settingsCache = null
+
+/** 写入串行化：并发 POST 曾以 truncate + write 交错写坏 JSON。 */
+let settingsWrite = Promise.resolve()
+
 /** Read the persisted settings, or the defaults when absent/corrupt. */
 async function readSettings() {
+  if (settingsCache !== null) return settingsCache
   try {
     const parsed = JSON.parse(await readFile(CONFIG_PATH, 'utf8'))
-    return sanitizeSettings(parsed)
-  } catch {
-    return Object.assign({}, DEFAULT_CONFIG)
+    settingsCache = sanitizeSettings(parsed)
+  } catch (error) {
+    if (error !== null && typeof error === 'object' && error.code !== 'ENOENT') {
+      warn(`config.json 读取失败（已回退默认值）：${error instanceof Error ? error.message : String(error)}`)
+    }
+    settingsCache = Object.assign({}, DEFAULT_CONFIG)
   }
+  return settingsCache
+}
+
+/**
+ * 合并式保存：以当前设置为底，只覆盖请求里带来的字段。
+ * 原来整份覆盖 + 非原子写，任何并发或崩溃都会留下半截 JSON（读取时又静默回默认值）。
+ * @param {object} patch 请求体里的设置片段。
+ * @returns {Promise<object>} 落盘后的完整设置。
+ */
+async function writeSettings(patch) {
+  const current = await readSettings()
+  const next = sanitizeSettings(Object.assign({}, current, patch))
+  settingsWrite = settingsWrite.catch(() => {}).then(() => writeJsonAtomic(CONFIG_PATH, next))
+  await settingsWrite
+  settingsCache = next
+  return next
 }
 
 /** Validate and normalize one settings object; unknown keys are dropped. */
@@ -300,7 +409,10 @@ async function readBody(req, cap) {
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > cap) return null
+    if (size > cap) {
+      req.destroy() // 超限要断开，否则客户端还在发、socket 悬挂
+      return null
+    }
     chunks.push(chunk)
   }
   return Buffer.concat(chunks)
@@ -309,6 +421,81 @@ async function readBody(req, cap) {
 function json(res, status, value) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(value))
+}
+
+// ── 请求准入 ───────────────────────────────────────────────────────────────
+
+function isLoopbackAddress(address) {
+  const value = address.toLowerCase()
+  return value === '::1' || value.startsWith('127.') || value.startsWith('::ffff:127.')
+}
+
+function isLoopbackHostname(hostname) {
+  const value = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  return value === 'localhost' || value === '::1' || value.startsWith('127.')
+}
+
+/**
+ * 请求准入。优先用编排里的 `connection` 服务（Host/Origin 栅栏 + 浏览器会话认证，
+ * 与官方 open-in-app 等路由属主同一套策略）；服务不可用时退化为自带的回环栅栏。
+ * 没有这道闸门时，本机任何进程都能改设置、上传文件、触发任意目录扫描。
+ * @returns 拒绝时返回 HTTP 状态码，放行返回 undefined。
+ */
+function requestRejection(ctx, req) {
+  try {
+    const connection = ctx.get('connection')
+    if (connection !== undefined && typeof connection.requestRejection === 'function') {
+      const code = connection.requestRejection(req)
+      if (code !== undefined) return code
+      return undefined
+    }
+  } catch {
+    // 服务不可用，走自带栅栏
+  }
+  const host = req.headers.host
+  if (typeof host !== 'string' || host === '') return 403
+  let hostUrl
+  try {
+    hostUrl = new URL(`http://${host}`)
+  } catch {
+    return 403
+  }
+  if (!isLoopbackHostname(hostUrl.hostname)) return 403
+  if (req.headers['sec-fetch-site'] === 'cross-site') return 403
+  const origin = req.headers.origin
+  if (origin !== undefined) {
+    try {
+      if (new URL(origin).host !== hostUrl.host) return 403
+    } catch {
+      return 403
+    }
+  }
+  const remote = req.socket === null || req.socket === undefined ? undefined : req.socket.remoteAddress
+  if (typeof remote === 'string' && remote !== '' && !isLoopbackAddress(remote)) return 403
+  return undefined
+}
+
+/** 写请求必须声明 JSON：阻止浏览器用简单请求跨站提交（免预检的那类）。 */
+function contentTypeAllowed(req) {
+  const type = req.headers['content-type']
+  return typeof type === 'string' && type.toLowerCase().includes('application/json')
+}
+
+/**
+ * 统一的入口闸门：先过准入，再要求写请求声明 JSON。
+ * @returns true 表示已经回写了拒绝响应，调用方应立即返回。
+ */
+function rejected(ctx, req, res) {
+  const rejection = requestRejection(ctx, req)
+  if (rejection !== undefined) {
+    json(res, rejection, { error: rejection === 401 ? 'unauthorized' : 'forbidden' })
+    return true
+  }
+  if ((req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') && !contentTypeAllowed(req)) {
+    json(res, 415, { error: 'expected application/json' })
+    return true
+  }
+  return false
 }
 
 // ── Wallpaper Engine 壁纸库（纯本地扫描，无第三方 API） ─────────────────────
@@ -494,6 +681,59 @@ async function resolvePkgFile(folder) {
 /** 可转换性探测缓存（会话内；scene.pkg 基本不变）。 */
 const convertProbeCache = new Map()
 
+/** 头部探测上限：条目表最多读这么多；单个 TEX 只读头部这么多。 */
+const PROBE_TABLE_MAX = 4 * 1024 * 1024
+const PROBE_TEX_BYTES = 64 * 1024
+
+/**
+ * 头部级探测：解析 PKG 条目表 + 每个 .tex 的头部，不把整个包读进内存。
+ * 原来扫描时对每张场景壁纸整包 readFile（scene.pkg 常见上百 MB），注释却写"只读头部"。
+ * 头部不足以判断时返回 null，由调用方退回整包探测，保证不漏判。
+ * @param {string} pkgPath scene.pkg 路径
+ * @returns {Promise<{video: boolean, gif: boolean}|null>}
+ */
+async function probePkgHeader(pkgPath) {
+  const handle = await open(pkgPath, 'r')
+  try {
+    let table = null
+    let size = 64 * 1024
+    for (;;) {
+      const want = Math.min(size, PROBE_TABLE_MAX)
+      const buf = Buffer.alloc(want)
+      const { bytesRead } = await handle.read(buf, 0, want, 0)
+      try {
+        table = parsePkgTable(buf.subarray(0, bytesRead))
+        break
+      } catch {
+        if (bytesRead < want || want >= PROBE_TABLE_MAX) return null
+        size *= 2
+      }
+    }
+    const result = { video: false, gif: false }
+    for (const entry of table.entries) {
+      if (!/\.tex$/i.test(entry.path) || entry.length < 8) continue
+      const position = table.dataStart + entry.offset
+      if (position < 0) return null
+      const want = Math.min(entry.length, PROBE_TEX_BYTES)
+      const buf = Buffer.alloc(want)
+      const { bytesRead } = await handle.read(buf, 0, want, position)
+      let tex
+      try {
+        tex = parseTex(buf.subarray(0, bytesRead))
+      } catch {
+        return null // 头部不够解析 → 交给整包路径
+      }
+      if (tex === null) continue
+      if ((tex.flags & 32) !== 0 || tex.imageFormat === 35) result.video = true
+      else if ((tex.flags & 4) !== 0) result.gif = true
+      if (result.video && result.gif) break
+    }
+    return result
+  } finally {
+    await handle.close()
+  }
+}
+
 /** 探测场景包是否含视频纹理 / 动画序列（只读头部、不解码像素）。 */
 async function probeConvertible(folder) {
   const cached = convertProbeCache.get(folder)
@@ -502,8 +742,15 @@ async function probeConvertible(folder) {
   try {
     const pkgName = await resolvePkgFile(folder)
     if (pkgName !== null) {
-      const pkgBuf = await readFile(join(folder, pkgName))
-      Object.assign(result, probeTextures(pkgBuf))
+      const pkgPath = join(folder, pkgName)
+      let probed = null
+      try {
+        probed = await probePkgHeader(pkgPath)
+      } catch {
+        probed = null
+      }
+      if (probed === null) probed = probeTextures(await readFile(pkgPath))
+      Object.assign(result, probed)
     }
   } catch { /* 保持 false */ }
   convertProbeCache.set(folder, result)
@@ -557,20 +804,70 @@ async function buildWeEntry(folder, id) {
   }
 }
 
-/** Serve one WE file (media or preview) with HEAD support. */
-function serveWeFile(req, res, filePath) {
-  return readFile(filePath).then((body) => {
-    const dot = filePath.lastIndexOf('.')
-    const ext = dot === -1 ? '' : filePath.slice(dot).toLowerCase()
-    res.writeHead(200, {
-      'content-type': MEDIA_TYPES[ext] ?? 'application/octet-stream',
-      'cache-control': 'no-cache',
-    })
-    if (req.method === 'HEAD') res.end()
-    else res.end(body)
-  }).catch(() => {
+/**
+ * Serve one WE file (media or preview) with HEAD support.
+ * 流式 + Range：原来整片 readFile 进内存，视频壁纸无法 seek 也没法边下边播。
+ */
+async function serveWeFile(req, res, filePath) {
+  let info
+  try {
+    info = await stat(filePath)
+  } catch {
     res.writeHead(404)
     res.end()
+    return
+  }
+  if (!info.isFile()) {
+    res.writeHead(404)
+    res.end()
+    return
+  }
+  const dot = filePath.lastIndexOf('.')
+  const ext = dot === -1 ? '' : filePath.slice(dot).toLowerCase()
+  const headers = {
+    'content-type': MEDIA_TYPES[ext] ?? 'application/octet-stream',
+    'cache-control': 'no-cache',
+    'x-content-type-options': 'nosniff',
+    'accept-ranges': 'bytes',
+  }
+  // SVG 作为独立文档打开时可能带脚本：锁死其能力（作为 <img>/CSS 背景使用时本来就不执行脚本）。
+  if (ext === '.svg') {
+    headers['content-security-policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+  }
+  let start = 0
+  let end = info.size - 1
+  let status = 200
+  const range = req.headers.range
+  if (typeof range === 'string') {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim())
+    if (match !== null && (match[1] !== '' || match[2] !== '')) {
+      if (match[1] === '') {
+        start = Math.max(0, info.size - Number(match[2]))
+        end = info.size - 1
+      } else {
+        start = Number(match[1])
+        end = match[2] === '' ? info.size - 1 : Math.min(Number(match[2]), info.size - 1)
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= info.size) {
+        res.writeHead(416, { 'content-range': `bytes */${info.size}` })
+        res.end()
+        return
+      }
+      status = 206
+      headers['content-range'] = `bytes ${start}-${end}/${info.size}`
+    }
+  }
+  headers['content-length'] = String(end - start + 1)
+  res.writeHead(status, headers)
+  if (req.method === 'HEAD') {
+    res.end()
+    return
+  }
+  await new Promise((resolve) => {
+    const stream = createReadStream(filePath, { start, end })
+    stream.on('error', () => { res.destroy(); resolve() })
+    stream.on('close', resolve)
+    stream.pipe(res)
   })
 }
 
@@ -794,6 +1091,62 @@ async function handleWeVideo(req, res, id) {
 const convertJobs = new Map()
 let convertJobSeq = 0
 
+/**
+ * 淘汰最旧的**已结束**作业。原来按条数 FIFO 无条件删最旧，
+ * 正在跑的作业被删掉后客户端永远查不到结果，进度条卡在 400ms 无限轮询。
+ */
+function pruneJobs() {
+  if (convertJobs.size <= MAX_JOBS) return
+  for (const [key, value] of convertJobs) {
+    if (convertJobs.size <= MAX_JOBS) break
+    if (value.state === 'running') continue
+    convertJobs.delete(key)
+  }
+}
+
+/**
+ * 在 worker 线程里跑一次转换，避免阻塞宿主事件循环。
+ * 原来整包 readFile + LZ4/DXT 解码 + GIF 编码全同步跑在 host 主线程上，
+ * 转换期间 Agent 与 HTTP 服务一起卡住，大场景还会把宿主内存顶爆。
+ * @param {string} pkgPath scene.pkg 路径
+ * @param {(done: number, total: number, phase: string) => void} onProgress 进度回调
+ * @returns {Promise<Array<{kind: 'mp4'|'gif', name: string, bytes: Buffer}>>}
+ */
+function convertInWorker(pkgPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./convert-worker.js', import.meta.url), {
+      workerData: { pkgPath },
+    })
+    let settled = false
+    const finish = (fn, value) => {
+      if (settled) return
+      settled = true
+      void worker.terminate()
+      fn(value)
+    }
+    worker.on('message', (message) => {
+      if (message === null || typeof message !== 'object') return
+      if (message.type === 'progress') {
+        if (onProgress !== undefined) onProgress(message.done, message.total, message.phase)
+        return
+      }
+      if (message.type === 'items') {
+        finish(resolve, message.items.map(item => ({
+          kind: item.kind,
+          name: item.name,
+          bytes: Buffer.from(item.bytes),
+        })))
+        return
+      }
+      if (message.type === 'error') finish(reject, new Error(message.message))
+    })
+    worker.on('error', error => finish(reject, error))
+    worker.on('exit', (code) => {
+      if (!settled && code !== 0) finish(reject, new Error(`转换进程异常退出（code ${code}）`))
+    })
+  })
+}
+
 /** 转换输出文件名：<id>-<标题>，去掉 Windows 非法字符。 */
 function safeConvertName(stem, ext) {
   const s = String(stem)
@@ -839,10 +1192,17 @@ async function handleWeOpenFolder(req, res) {
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
   try { await mkdir(CONVERT_DIR, { recursive: true }) } catch { /* 目录建失败也继续尝试打开 */ }
   try {
-    spawn('powershell', [
-      '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
-      '-Command', 'Start-Process explorer.exe -ArgumentList ' + JSON.stringify(CONVERT_DIR),
-    ], { stdio: 'ignore', windowsHide: true }).on('error', () => {})
+    if (process.platform === 'win32') {
+      // 路径经环境变量传给 PowerShell：拼进 -Command 文本时，路径里的引号或
+      // $(...) 会改变脚本语义（用户名含单引号即可触发）。
+      await execFileP('powershell', [
+        '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+        '-Command', 'Start-Process explorer.exe -ArgumentList $env:BG_OPEN_DIR',
+      ], { windowsHide: true, env: Object.assign({}, process.env, { BG_OPEN_DIR: CONVERT_DIR }) })
+    } else {
+      await execFileP(process.platform === 'darwin' ? 'open' : 'xdg-open', [CONVERT_DIR], {})
+    }
+    // 注：原实现调用的是从未导入的 spawn，每次必抛 ReferenceError 并被 catch 吞成 ok:false。
     json(res, 200, { ok: true, dir: CONVERT_DIR })
   } catch {
     json(res, 200, { ok: false, message: '无法打开资源管理器' })
@@ -854,7 +1214,8 @@ async function handleWeJob(req, res, query) {
   const id = query.get('id') ?? ''
   const job = convertJobs.get(id)
   if (job === undefined) {
-    json(res, 200, { ok: false, message: '作业不存在或已过期' })
+    // 明确告知"已过期"，客户端据此停止轮询（原来只当"还在跑"，400ms 无限续期）。
+    json(res, 200, { ok: false, expired: true, message: '作业不存在或已过期' })
     return
   }
   json(res, 200, {
@@ -907,24 +1268,17 @@ async function handleWeConvert(req, res) {
   const jobId = `conv${++convertJobSeq}`
   const job = { state: 'running', progress: 0, message: '准备转换…', files: null }
   convertJobs.set(jobId, job)
-  // 上限保留最近 5 个作业，避免内存膨胀
-  if (convertJobs.size > 5) {
-    const oldest = convertJobs.keys().next().value
-    convertJobs.delete(oldest)
-  }
+  pruneJobs()
 
   void (async () => {
     try {
-      const pkgBuf = await readFile(pkgPath)
       job.message = '提取视频纹理…'
-      const videos = await extractVideoMp4s(pkgBuf, (done, total) => {
-        job.progress = total > 0 ? Math.round((done / total) * 50) : 0
+      // 解码在 worker 线程里跑：宿主事件循环不再被 LZ4/DXT/GIF 编码占住。
+      const items = await convertInWorker(pkgPath, (done, total, phase) => {
+        if (phase === 'video') job.progress = total > 0 ? Math.round((done / total) * 50) : 0
+        else job.progress = total > 0 ? Math.round(50 + (done / total) * 50) : 50
+        if (phase === 'gif') job.message = '转换动画序列（GIF）…'
       })
-      job.message = '转换动画序列（GIF）…'
-      const gifs = await extractGifTextures(pkgBuf, (done, total) => {
-        job.progress = total > 0 ? Math.round(50 + (done / total) * 50) : 50
-      })
-      const items = [...videos, ...gifs]
       if (items.length === 0) {
         job.state = 'error'
         job.message = '该场景没有可提取的视频纹理或动画序列（纯 3D/粒子场景，内置转换无果）'
@@ -933,17 +1287,19 @@ async function handleWeConvert(req, res) {
       }
       job.message = '写入转换文件夹…'
       job.progress = 95
+      // 目录必须先建：原来只有"打开文件夹"会 mkdir，首次转换直接写盘会失败
+      // （在用户机器上被早已存在的目录掩盖了）。
+      await mkdir(CONVERT_DIR, { recursive: true })
       const added = []
       let skipped = 0
       let n = 0
       for (const item of items) {
-        const isGif = item.gif !== undefined
-        const buf = isGif ? item.gif : item.mp4
+        const isGif = item.kind === 'gif'
         const stem = `${id}-${title}${items.length > 1 ? '-' + (++n) : ''}`
         const dest = join(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4'))
         if (existsSync(dest)) { skipped++; continue } // 已存在：跳过，不再产生 -N 副本
         try {
-          await writeFile(dest, buf)
+          await writeFile(dest, item.bytes)
           added.push({ name: basename(dest), url: '/bg/conv/' + encodeURIComponent(basename(dest)) })
         } catch { /* 单个失败继续 */ }
       }
@@ -973,22 +1329,21 @@ async function autoConvertOne(id, idToFolder) {
   const proj = await readProject(folder)
   const pkgName = await resolvePkgFile(folder)
   if (pkgName === null) return null
-  const pkgBuf = await readFile(join(folder, pkgName))
-  const items = [...(await extractVideoMp4s(pkgBuf)), ...(await extractGifTextures(pkgBuf))]
+  const items = await convertInWorker(join(folder, pkgName))
   if (items.length === 0) return null
   const title = proj !== null && typeof proj.title === 'string' && proj.title.trim() !== ''
     ? proj.title.trim().slice(0, 60) : id
+  await mkdir(CONVERT_DIR, { recursive: true })
   const added = []
   let n = 0
   for (const item of items) {
-    const isGif = item.gif !== undefined
-    const buf = isGif ? item.gif : item.mp4
+    const isGif = item.kind === 'gif'
     const stem = `${id}-${title}${items.length > 1 ? '-' + (++n) : ''}`
     const dest = join(CONVERT_DIR, safeConvertName(stem, isGif ? '.gif' : '.mp4'))
     // 已存在则跳过：不再产生 -N 重复副本（去重核心）
     if (existsSync(dest)) continue
     try {
-      await writeFile(dest, buf)
+      await writeFile(dest, item.bytes)
       added.push(basename(dest))
     } catch { /* 单个失败继续 */ }
   }
@@ -1000,10 +1355,7 @@ function startAutoConvertJob(ids, idToFolder) {
   const jobId = `conv${++convertJobSeq}`
   const job = { state: 'running', progress: 0, message: '自动转换中…', files: null }
   convertJobs.set(jobId, job)
-  if (convertJobs.size > 5) {
-    const oldest = convertJobs.keys().next().value
-    convertJobs.delete(oldest)
-  }
+  pruneJobs()
   const total = ids.length
   void (async () => {
     let done = 0
@@ -1024,10 +1376,14 @@ function startAutoConvertJob(ids, idToFolder) {
 }
 
 export function apply(ctx) {
+  // 首次启动：把老版本写在包目录里的 config.json / 上传图片搬到数据目录。
+  void migrateLegacyData().then(() => readSettings()).catch(() => {})
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/bg',
     handler: async (req, res) => {
+      if (rejected(ctx, req, res)) return
       let pathname
       let query
       try {
@@ -1111,27 +1467,28 @@ export function apply(ctx) {
         res.end()
         return
       }
-      const filePath = join(ASSETS_DIR, rel)
-      const normalized = normalize(filePath)
-      if (!normalized.startsWith(ASSETS_DIR)) {
+      // 用户目录优先，随包资源兜底（老版本把上传图片放在包内 assets/，
+      // 迁移时不删除包内文件，避免误删 git 跟踪的默认图）。
+      const userPath = join(ASSETS_DIR, rel)
+      const bundledPath = join(BUNDLED_ASSETS_DIR, rel)
+      let filePath = null
+      try {
+        await access(userPath)
+        filePath = userPath
+      } catch {
+        try {
+          await access(bundledPath)
+          filePath = bundledPath
+        } catch {
+          filePath = null
+        }
+      }
+      if (filePath === null) {
         res.writeHead(404)
         res.end()
         return
       }
-      try {
-        const body = await readFile(filePath)
-        const dot = filePath.lastIndexOf('.')
-        const ext = dot === -1 ? '' : filePath.slice(dot).toLowerCase()
-        res.writeHead(200, {
-          'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
-          'cache-control': 'no-cache',
-        })
-        if (req.method === 'HEAD') res.end()
-        else res.end(body)
-      } catch {
-        res.writeHead(404)
-        res.end()
-      }
+      await serveWeFile(req, res, filePath)
     },
   }), 'dsh-bg-beautify: /bg asset route')
 
@@ -1139,6 +1496,7 @@ export function apply(ctx) {
     kind: 'exact',
     path: '/bg/upload',
     handler: async (req, res) => {
+      if (rejected(ctx, req, res)) return
       if (req.method !== 'POST') {
         res.writeHead(405)
         res.end()
@@ -1177,7 +1535,9 @@ export function apply(ctx) {
         json(res, 400, { error: 'empty image data' })
         return
       }
-      const fileName = safeName(name, ext)
+      // 同名文件不再静默覆盖用户已有的背景图：已存在则自动追加 -2/-3 序号。
+      await mkdir(ASSETS_DIR, { recursive: true })
+      const fileName = uniquePath(ASSETS_DIR, safeName(name, ext))
       try {
         await writeFile(join(ASSETS_DIR, fileName), buffer)
       } catch {
@@ -1192,6 +1552,7 @@ export function apply(ctx) {
     kind: 'exact',
     path: '/bg/settings',
     handler: async (req, res) => {
+      if (rejected(ctx, req, res)) return
       if (req.method === 'GET' || req.method === 'HEAD') {
         const settings = await readSettings()
         json(res, 200, settings)
@@ -1210,10 +1571,8 @@ export function apply(ctx) {
           json(res, 400, { error: 'invalid JSON' })
           return
         }
-        const sanitized = sanitizeSettings(parsed)
-        try {
-          await writeFile(CONFIG_PATH, JSON.stringify(sanitized, null, 2))
-        } catch {
+        const sanitized = await writeSettings(parsed).catch(() => null)
+        if (sanitized === null) {
           json(res, 500, { error: 'write failed' })
           return
         }

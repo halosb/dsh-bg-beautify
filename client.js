@@ -347,13 +347,37 @@ window.__ModuleLoader__.load({
       }).catch(function () {})
 
       // Persist one settings object through the plugin's own host endpoint.
-      function persist(cfg) {
+      // 防抖 300ms + 串行发送：原来每次按键/拖动滑块都整份 POST，多个 in-flight
+      // 请求乱序到达时磁盘上的配置不是界面最后一次状态。
+      var persistTimer = null
+      var persistInFlight = false
+      var persistPending = null
+
+      function flushPersist() {
+        persistTimer = null
+        if (persistInFlight || persistPending === null) return
+        var cfg = persistPending
+        persistPending = null
+        persistInFlight = true
         fetch('/bg/settings', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(cfg),
-        }).catch(function () {})
+        }).catch(function () {}).then(function () {
+          persistInFlight = false
+          if (persistPending !== null) flushPersist()
+        })
       }
+
+      function persist(cfg) {
+        persistPending = cfg
+        if (persistTimer !== null) clearTimeout(persistTimer)
+        persistTimer = setTimeout(flushPersist, 300)
+      }
+
+      ctx.effect(function () {
+        return function () { if (persistTimer !== null) clearTimeout(persistTimer) }
+      }, 'dsh-bg-beautify: pending settings write')
 
       // Section UI stylesheet (design-system classes) — one style tag, removed
       // with the fiber.
@@ -780,7 +804,9 @@ window.__ModuleLoader__.load({
       react.useEffect(function () { loadConverted() }, [])
       var s = store.get()
       function setField(field, value) {
-        var next = Object.assign({}, s)
+        // 从 store 现取，而不是本次渲染的快照：同一渲染周期内连续改两个字段时，
+        // 旧写法会让后一次覆盖前一次，并把被覆盖的状态写进磁盘。
+        var next = Object.assign({}, store.get())
         next[field] = value
         store.set(next)
         persist(next)
@@ -918,12 +944,29 @@ window.__ModuleLoader__.load({
             weState[1](function (prev) { return Object.assign({}, prev, { msg: '转换请求失败' }) })
           })
       }
-      function pollJob(jobId, applyFirst) {
+      // 轮询句柄与截止时间用 ref 保存：函数组件的普通局部变量每次渲染都会重置。
+      var pollRef = react.useRef(null)
+      var deadlineRef = react.useRef(0)
+      react.useEffect(function () {
+        return function () {
+          if (pollRef.current !== null) { clearTimeout(pollRef.current); pollRef.current = null }
+        }
+      }, [])
+      function stopPoll(message) {
+        if (pollRef.current !== null) { clearTimeout(pollRef.current); pollRef.current = null }
+        convState[1](function (prev) { return Object.assign({}, prev, { job: null, running: false }) })
+        if (message) weState[1](function (prev) { return Object.assign({}, prev, { msg: message }) })
+      }
+      function pollJob(jobId, applyFirst, restart) {
         var apply = applyFirst !== false // 手动转换默认自动应用首个产物；自动转换不应用
+        // 轮询有上限、明确结束即停：作业被淘汰或跑飞时不再 400ms 无限续期。
+        if (restart !== false) deadlineRef.current = Date.now() + 15 * 60 * 1000
         fetch('/bg/we/job?id=' + encodeURIComponent(jobId))
           .then(function (r) { return r.json() })
           .then(function (job) {
-            if (job === null || typeof job !== 'object') return
+            if (job === null || typeof job !== 'object') { stopPoll('进度查询失败'); return }
+            // 作业不存在/已过期：宿主明确告知，立即停止轮询（原来只当"还在跑"）。
+            if (job.ok === false) { stopPoll(job.message || '作业已过期'); return }
             if (job.state === 'done') {
               convState[1](function (prev) { return Object.assign({}, prev, { job: null, progress: 100, running: false }) })
               weState[1](function (prev) { return Object.assign({}, prev, { msg: job.message || '转换完成' }) })
@@ -951,11 +994,11 @@ window.__ModuleLoader__.load({
               running: true,
             }) })
             if (job.message !== undefined) weState[1](function (prev) { return Object.assign({}, prev, { msg: job.message }) })
-            setTimeout(function () { pollJob(jobId, apply) }, 400)
+            if (Date.now() > deadlineRef.current) { stopPoll('转换超时，已停止轮询（可查看「转换视频」标签的产物）'); return }
+            pollRef.current = setTimeout(function () { pollJob(jobId, apply, false) }, 400)
           })
           .catch(function () {
-            convState[1](function (prev) { return Object.assign({}, prev, { job: null, running: false }) })
-            weState[1](function (prev) { return Object.assign({}, prev, { msg: '进度查询失败' }) })
+            stopPoll('进度查询失败')
           })
       }
       function pickConverted(f) {
@@ -1229,7 +1272,7 @@ window.__ModuleLoader__.load({
         }),
         Row({
           title: '背景纱幕',
-          caption: '在背景图上叠加一层半透明纱幕，整体对比更强（默认关闭）。',
+          caption: '在背景图上叠加一层半透明纱幕，整体对比更强（默认开启）。',
           children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
             el('input', {
               type: 'checkbox', className: 'dsh-bgb-check', checked: s.scrim === true,
@@ -1267,7 +1310,7 @@ window.__ModuleLoader__.load({
         }),
         Row({
           title: '使用交叉色',
-          caption: '勾选后光晕在主色与交叉色之间无缝融合交替（默认关闭）。',
+          caption: '勾选后光晕在主色与交叉色之间无缝融合交替（默认开启）。',
           children: el('label', { className: 'dsh-bgb-checkText', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
             el('input', {
               type: 'checkbox', className: 'dsh-bgb-check', checked: s.glowCross === true,

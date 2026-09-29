@@ -2,14 +2,24 @@
 // Builds a fake Steam library tree, mounts the plugin with a mock webServer,
 // and exercises /bg/we/list, /bg/we/preview/<id>, /bg/we/media/<id>,
 // path-traversal guards, and the unchanged /bg asset route.
-import { mkdir, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, writeFile, readdir, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { Writable } from 'node:stream'
 import assert from 'node:assert/strict'
 
 const PLUGIN_DIR = fileURLToPath(new URL('..', import.meta.url))
-const CONFIG = join(PLUGIN_DIR, 'config.json')
-const SCRATCH = join(PLUGIN_DIR, 'scratch-we')
+// 所有落盘路径必须重定向到临时目录。原来 CONFIG 直接指向插件目录里的
+// 真实 config.json，测试结束还会把它 rm 掉——在已安装副本里跑测试等于删用户设置。
+const SCRATCH = join(tmpdir(), 'dsh-bg-beautify-test-' + process.pid)
+process.env.DSH_HOME = join(SCRATCH, 'dsh-home')
+process.env.DSH_PROFILE = 'test'
+process.env.USERPROFILE = join(SCRATCH, 'profile')
+process.env.HOME = process.env.USERPROFILE
+const DATA_DIR = join(process.env.DSH_HOME, 'plugin-data', 'test', 'dsh-bg-beautify')
+const CONFIG = join(DATA_DIR, 'config.json')
+const ASSETS = join(DATA_DIR, 'assets')
 const STEAM = join(SCRATCH, 'Steam', 'steamapps')
 const CONTENT = join(STEAM, 'workshop', 'content', '431960')
 
@@ -61,12 +71,14 @@ await writeFile(join(CONTENT, '1004', 'project.json'), JSON.stringify({
 await writeFile(join(CONTENT, '1004', 'preview.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 7, 8, 9]))
 
 // persist a manual wePath so media/preview routes resolve
+await mkdir(DATA_DIR, { recursive: true })
 await writeFile(CONFIG, JSON.stringify({ wePath: CONTENT }))
 
 // ── mount plugin with a mock ctx ──────────────────────────────────────────
 const routes = new Map()
 const ctx = {
   effect(fn) { return fn() },
+  get() { return undefined }, // 没有 connection 服务 → 走插件自带的回环栅栏
   webServer: {
     register(cfg) { routes.set(cfg.kind + ':' + cfg.path, cfg.handler) },
   },
@@ -74,24 +86,42 @@ const ctx = {
 const plugin = await import('../index.js')
 plugin.apply(ctx)
 const handler = routes.get('prefix:/bg')
+const uploadHandler = routes.get('exact:/bg/upload')
+const settingsHandler = routes.get('exact:/bg/settings')
 assert.ok(handler !== null, 'prefix /bg handler registered')
+assert.ok(uploadHandler !== null, 'upload handler registered')
+assert.ok(settingsHandler !== null, 'settings handler registered')
 
+// 真实的 http.ServerResponse 是可写流（serveWeFile 现在用 stream.pipe 流式发送，
+// 并支持 Range），所以 mock 也必须是 Writable。
 function makeRes() {
-  return {
-    status: 200,
-    headers: {},
-    body: null,
-    writeHead(s, h) { this.status = s; this.headers = h ?? {} },
-    end(b) { this.body = b === undefined ? null : b },
-  }
+  const chunks = []
+  const res = new Writable({
+    write(chunk, _enc, cb) { chunks.push(Buffer.from(chunk)); cb() },
+  })
+  res.status = 200
+  res.headers = {}
+  Object.defineProperty(res, 'body', {
+    get() { return chunks.length === 0 ? null : Buffer.concat(chunks) },
+  })
+  res.writeHead = function (s, h) { this.status = s; this.headers = h ?? {} }
+  return res
 }
-async function call(method, url, body) {
+async function call(method, url, body, extraHeaders) {
+  return callOn(handler, method, url, body, extraHeaders)
+}
+async function callOn(target, method, url, body, extraHeaders) {
   const res = makeRes()
   let bodyBytes = null
   if (body !== undefined) bodyBytes = Buffer.from(JSON.stringify(body), 'utf8')
+  const headers = Object.assign({ host: '127.0.0.1:3080' }, extraHeaders ?? {})
+  if (bodyBytes !== null && headers['content-type'] === undefined) headers['content-type'] = 'application/json'
   const req = {
     method,
     url,
+    headers,
+    socket: { remoteAddress: '127.0.0.1' },
+    destroy() {},
     [Symbol.asyncIterator]() {
       let sent = bodyBytes === null
       return {
@@ -103,7 +133,7 @@ async function call(method, url, body) {
       }
     },
   }
-  await handler(req, res)
+  await target(req, res)
   return res
 }
 
@@ -229,7 +259,7 @@ assert.equal(cv.ok, true)
 assert.ok(Array.isArray(cv.files))
 r = await call('GET', '/bg/we/openfolder') // 只验证方法守卫，不真正打开资源管理器
 assert.equal(r.status, 405)
-r = await call('POST', '/bg/we/convert') // 缺 id → 400
+r = await call('POST', '/bg/we/convert', {}) // 缺 id → 400
 assert.equal(r.status, 400)
 // 启动转换作业（1002 场景无视频/GIF 纹理 → 作业最终 error，轮询验证进度）
 r = await call('POST', '/bg/we/convert', { id: '1002' })
@@ -264,6 +294,7 @@ for (let i = 0; i < 300; i++) {
   if (job2.state === 'done' || job2.state === 'error') break
   await new Promise((resolve) => setTimeout(resolve, 50))
 }
+if (job2 !== null && job2.state !== 'done') console.error('DIAG job2 =', JSON.stringify(job2))
 assert.ok(job2 !== null && job2.state === 'done', 'gif scene converts')
 assert.ok(Array.isArray(job2.files) && job2.files.length > 0)
 assert.ok(job2.files[0].name.endsWith('.gif'), 'produced a gif')
@@ -301,11 +332,74 @@ r = await call('GET', '/bg/1.png/../config.json')
 assert.equal(r.status, 404)
 r = await call('GET', '/bg/../package.json')
 assert.equal(r.status, 404)
-r = await call('POST', '/bg/we/list')
+r = await call('POST', '/bg/we/list', {}) // 方法守卫：列表只接受 GET
 assert.equal(r.status, 405)
 console.log('PASS asset route')
 
+// ── 新增：请求准入（原来所有路由零鉴权） ───────────────────────────────────
+r = await call('GET', '/bg/settings', undefined, { host: 'evil.example.com' })
+assert.equal(r.status, 403, 'non-loopback Host must be rejected')
+r = await call('GET', '/bg/settings', undefined, { 'sec-fetch-site': 'cross-site' })
+assert.equal(r.status, 403, 'cross-site marker must be rejected')
+r = await call('GET', '/bg/settings', undefined, { origin: 'http://evil.example.com' })
+assert.equal(r.status, 403, 'cross-origin Origin must be rejected')
+r = await callOn(settingsHandler, 'POST', '/bg/settings', undefined, { 'content-type': 'text/plain' })
+assert.equal(r.status, 415, 'POST without JSON content-type must be rejected')
+console.log('PASS request admission')
+
+// ── 新增：设置写入是合并 + 原子 + 缓存 ─────────────────────────────────────
+r = await callOn(settingsHandler, 'POST', '/bg/settings', { opacityMain: 0.5 })
+assert.equal(r.status, 200)
+let saved = JSON.parse(r.body.toString('utf8'))
+assert.equal(saved.opacityMain, 0.5)
+assert.equal(saved.opacitySidebar, 0.5, 'unsent fields keep their previous value (merge, not reset)')
+r = await callOn(settingsHandler, 'POST', '/bg/settings', { wePath: CONTENT })
+saved = JSON.parse(r.body.toString('utf8'))
+assert.equal(saved.opacityMain, 0.5, 'merge keeps earlier change')
+assert.equal(saved.wePath, CONTENT)
+const onDisk = JSON.parse(await readFile(CONFIG, 'utf8'))
+assert.equal(onDisk.wePath, CONTENT)
+assert.equal(onDisk.opacityMain, 0.5)
+console.log('PASS settings merge + atomic write')
+
+// ── 新增：上传同名不再静默覆盖 ─────────────────────────────────────────────
+const pngData = 'data:image/png;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
+r = await callOn(uploadHandler, 'POST', '/bg/upload', { name: 'wall.png', data: pngData })
+assert.equal(r.status, 200)
+const firstUrl = JSON.parse(r.body.toString('utf8')).url
+r = await callOn(uploadHandler, 'POST', '/bg/upload', { name: 'wall.png', data: pngData })
+assert.equal(r.status, 200)
+const secondUrl = JSON.parse(r.body.toString('utf8')).url
+assert.notEqual(firstUrl, secondUrl, 'second upload with the same name must not overwrite the first')
+// 迁移会把随包的 assets/1.png 复制进来，所以只数本次上传的两个
+assert.equal((await readdir(ASSETS)).filter((n) => n.startsWith('wall')).length, 2)
+console.log('PASS upload does not overwrite')
+
+// ── 新增：媒体 Range 请求（视频壁纸 seek） ─────────────────────────────────
+r = await call('GET', '/bg/we/media/1001', undefined, { range: 'bytes=2-5' })
+assert.equal(r.status, 206, 'range request returns 206')
+assert.equal(r.headers['content-range'], 'bytes 2-5/8')
+assert.deepEqual([...r.body], [0, 24, 102, 116]) // 文件 8 字节：0,0,0,24,102,116,121,112
+r = await call('GET', '/bg/we/media/1001')
+assert.equal(r.headers['accept-ranges'], 'bytes')
+console.log('PASS media range')
+
+// ── 新增：过期作业明确结束轮询（客户端不再无限 400ms 轮询） ────────────────
+r = await call('GET', '/bg/we/job?id=conv-does-not-exist')
+const gone = JSON.parse(r.body.toString('utf8'))
+assert.equal(gone.ok, false)
+assert.equal(gone.expired, true, 'missing job reports expired')
+console.log('PASS expired job signal')
+
+// ── 新增：SVG 伺服带 CSP（作为独立文档打开时不执行脚本） ───────────────────
+await mkdir(ASSETS, { recursive: true })
+await writeFile(join(ASSETS, 'x.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+r = await call('GET', '/bg/x.svg')
+assert.equal(r.status, 200)
+assert.ok(String(r.headers['content-security-policy'] ?? '').includes("default-src 'none'"), 'svg gets a locked-down CSP')
+assert.equal(r.headers['x-content-type-options'], 'nosniff')
+console.log('PASS svg hardening')
+
 // ── cleanup ───────────────────────────────────────────────────────────────
-await rm(CONFIG, { force: true })
 await rm(SCRATCH, { recursive: true, force: true })
-console.log('ALL PASS — scratch tree + config.json cleaned up')
+console.log('ALL PASS — 全部落在临时目录，用户真实 config.json / 图片未被触碰')
