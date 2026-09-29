@@ -58,13 +58,22 @@ const BUNDLED_ASSETS_DIR = fileURLToPath(new URL('./assets/', import.meta.url))
  * 用户数据目录：<DSH_HOME>/plugin-data/<profile>/dsh-bg-beautify/
  * 刻意放在 pnpm 管理的包目录之外：`dsh plugin update/remove` 会重建包目录，
  * 老版本把 config.json 和用户上传的图片都写在包内，一次更新就全没了。
+ *
+ * profile 从包路径推导（`<DSH_HOME>\profiles\<profile>\node_modules\<包名>\`）：
+ * 实测宿主进程里只有 DSH_HOME、**没有** DSH_PROFILE，只靠环境变量会让所有
+ * profile 都落到 plugin-data\default\ 上互相覆盖。
  */
-const DSH_HOME = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME !== ''
-  ? process.env.DSH_HOME
-  : join(homedir(), '.dsh')
-const PROFILE = typeof process.env.DSH_PROFILE === 'string' && process.env.DSH_PROFILE !== ''
-  ? process.env.DSH_PROFILE
-  : 'default'
+function deriveProfilePaths(packageDir) {
+  const matched = /^(.*)[\\/]profiles[\\/]([^\\/]+)[\\/]node_modules[\\/]/i.exec(packageDir)
+  return matched === null ? null : { home: matched[1], profile: matched[2] }
+}
+const DERIVED = deriveProfilePaths(PACKAGE_DIR)
+const DSH_HOME = DERIVED !== null
+  ? DERIVED.home
+  : (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME !== '' ? process.env.DSH_HOME : join(homedir(), '.dsh'))
+const PROFILE = DERIVED !== null
+  ? DERIVED.profile
+  : (typeof process.env.DSH_PROFILE === 'string' && process.env.DSH_PROFILE !== '' ? process.env.DSH_PROFILE : 'default')
 const DATA_DIR = join(DSH_HOME, 'plugin-data', PROFILE, 'dsh-bg-beautify')
 
 /** 用户上传的背景图目录（数据目录内，写入目标）。 */
@@ -286,6 +295,52 @@ async function writeJsonAtomic(path, value) {
     await rm(temp, { force: true })
     throw error
   }
+}
+
+/**
+ * 0.4.0 在拿不到 profile 名时把数据写进了 plugin-data/default/，这里按需搬回当前 profile。
+ * 只搬不覆盖：新位置已有的文件保留。
+ */
+async function migrateDefaultProfileData() {
+  const legacyDir = join(DSH_HOME, 'plugin-data', 'default', 'dsh-bg-beautify')
+  if (legacyDir === DATA_DIR) return
+  try {
+    await stat(legacyDir)
+  } catch {
+    return // 没有旧目录
+  }
+  await mkdir(ASSETS_DIR, { recursive: true })
+  const config = join(DATA_DIR, 'config.json')
+  try {
+    await stat(config)
+  } catch {
+    try {
+      await copyFile(join(legacyDir, 'config.json'), config)
+      await rm(join(legacyDir, 'config.json'), { force: true })
+      warn('已把 config.json 从 plugin-data/default 迁移到当前 profile')
+    } catch { /* 没有旧配置 */ }
+  }
+  let entries = []
+  try {
+    entries = await readdir(join(legacyDir, 'assets'), { withFileTypes: true })
+  } catch {
+    return
+  }
+  let moved = 0
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const target = join(ASSETS_DIR, entry.name)
+    try {
+      await stat(target)
+      continue
+    } catch { /* 目标不存在才搬 */ }
+    try {
+      await copyFile(join(legacyDir, 'assets', entry.name), target)
+      await rm(join(legacyDir, 'assets', entry.name), { force: true })
+      moved += 1
+    } catch { /* 忽略单个失败 */ }
+  }
+  if (moved > 0) warn(`已把 ${moved} 张背景图从 plugin-data/default 迁移到当前 profile`)
 }
 
 /**
@@ -1377,7 +1432,7 @@ function startAutoConvertJob(ids, idToFolder) {
 
 export function apply(ctx) {
   // 首次启动：把老版本写在包目录里的 config.json / 上传图片搬到数据目录。
-  void migrateLegacyData().then(() => readSettings()).catch(() => {})
+  void migrateDefaultProfileData().then(() => migrateLegacyData()).then(() => readSettings()).catch(() => {})
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
