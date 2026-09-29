@@ -41,6 +41,9 @@
 
 ## 安装
 
+> 🖥️ **桌面版（DeepSeek Harness Desktop 安装包）用户看这里** → **[安装教程-桌面版.md](./安装教程-桌面版.md)**
+> 桌面版不需要你自己装 Node / pnpm，也不需要源码目录，但 profile 要用 `desktop` 而不是 `web`，且装完要**完全退出桌面版（含托盘）再打开**。下面是源码运行 / `dsh web` 的装法。
+
 ```powershell
 # 从 GitHub 安装（已安装 CLI）
 dsh plugin --profile web add github:halosb/dsh-bg-beautify
@@ -148,6 +151,7 @@ dsh-bg-beautify/
 ├── tests/                # 单元/路由测试（we-convert、we-routes）
 ├── README.md
 ├── 安装教程-INSTALL.zh.md
+├── 安装教程-桌面版.md     # DeepSeek Harness 桌面版安装教程
 └── LICENSE
 ```
 
